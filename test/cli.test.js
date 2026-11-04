@@ -1,14 +1,14 @@
 "use strict";
 
-// The command line, the options and the version in every manifest. None of
-// these need ffmpeg except the last two.
+// The command line, the options and the version in every manifest. Only
+// the ones that read a file need ffmpeg.
 
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 const { parse, parseTime, parseFps } = require("../skills/musicfit/scripts/musicfit");
-const { fixture } = require("./helpers");
+const { fixture, dir } = require("./helpers");
 
 const CLI = path.resolve(__dirname, "../skills/musicfit/scripts/musicfit.js");
 
@@ -87,4 +87,25 @@ test("a file that is not audio gets a clear error", () => {
   const run = spawnSync(process.execPath, [CLI, __filename, "--length", "10"], { encoding: "utf8" });
   assert.equal(run.status, 1);
   assert.match(run.stderr, /Cannot read|no audio/);
+});
+
+test("a video with no sound says so", () => {
+  const film = path.join(dir, "silent-film.mp4");
+  const made = spawnSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=32x32:d=0.5", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const run = spawnSync(process.execPath, [CLI, film, "--length", "5", "--out", path.join(dir, "silent-film")], { encoding: "utf8" });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /silent-film\.mp4 has no audio stream/);
+});
+
+test("a voice file that is not there, or a folder that cannot be written, is told before any work", () => {
+  const { file } = fixture("house");
+  const voice = spawnSync(process.execPath, [CLI, file, "--length", "10", "--voice", path.join(dir, "nobody.wav"), "--out", path.join(dir, "no-voice")], { encoding: "utf8" });
+  assert.equal(voice.status, 1);
+  assert.match(voice.stderr, /Cannot read .*nobody\.wav: no such file/);
+  assert.doesNotMatch(voice.stderr, /Reading/);
+  const blocked = spawnSync(process.execPath, [CLI, file, "--length", "10", "--out", path.join(file, "out")], { encoding: "utf8" });
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /Cannot write to .*: a file is in the way/);
+  assert.doesNotMatch(blocked.stderr, /Reading/);
 });

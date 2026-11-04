@@ -34,7 +34,7 @@ function run(args, input) {
       if (code === 0) resolve({ chunks: out, stderr });
       else {
         const why = stderr.trim().split("\n").filter(Boolean).pop() || `ffmpeg exited with ${code}`;
-        reject(new Error(why));
+        reject(Object.assign(new Error(why), { stderr }));
       }
     });
     if (input) {
@@ -71,9 +71,11 @@ async function decode(file, { rate = RATE, channels = 2 } = {}) {
     if (!samples.length) throw new Error(`${file} has no audio`);
     return samples;
   } catch (err) {
-    if (/matches no streams/.test(err.message)) throw new Error(`${file} has no audio stream`);
-    if (/No such file|does not exist/.test(err.message)) throw new Error(`Cannot read ${file}: no such file`);
-    if (/Invalid data found/.test(err.message)) throw new Error(`Cannot read ${file}: ffmpeg does not know this format`);
+    // ffmpeg says why early and sums up last, so all it said is searched.
+    const said = err.stderr || err.message;
+    if (/matches no streams/.test(said)) throw new Error(`${file} has no audio stream`);
+    if (/No such file|does not exist/.test(said)) throw new Error(`Cannot read ${file}: no such file`);
+    if (/Invalid data found/.test(said)) throw new Error(`Cannot read ${file}: ffmpeg does not know this format`);
     throw err;
   }
 }

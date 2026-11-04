@@ -43,12 +43,30 @@ function prepare(dir) {
   for (const name of OUTPUTS) fs.rmSync(path.join(dir, name), { force: true });
 }
 
+// Whether the folder to write to can be made, checked before any work so a
+// run does not fail at its end over it (and so a recursive mkdir is never
+// tried where it does not return, such as /proc): the nearest folder that
+// exists has to be one, and writable.
+function writable(dir) {
+  let at = path.resolve(dir);
+  while (!fs.existsSync(at)) at = path.dirname(at);
+  try {
+    if (!fs.statSync(at).isDirectory()) throw Object.assign(new Error(`${at} is a file`), { code: "ENOTDIR" });
+    fs.accessSync(at, fs.constants.W_OK);
+  } catch (err) {
+    const why = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "the disk is read-only", ENOTDIR: "a file is in the way" }[err.code] || err.message;
+    throw new Error(`Cannot write to ${dir}: ${why}`);
+  }
+}
+
 // options: { length, hit, drop, fps, voice, duck, lufs, end, fade, bpm,
 // meter, out, analyze, log }
 async function fit(track, options) {
   const log = options.log || (() => {});
   const dir = options.out || `musicfit-${slug(track)}`;
   const trackName = path.basename(track);
+  if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
+  writable(dir);
   log(`Reading ${trackName}`);
   // The interleaved copy is let go as soon as it is split.
   const [source, mono] = await Promise.all([decode(track, { rate: RATE, channels: 2 }).then(split), decode(track, { rate: ANALYSIS_RATE, channels: 1 })]);
