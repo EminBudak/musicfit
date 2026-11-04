@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "musicfit",
+  "version": "0.1.0",
+  "description": "Fit a music track to a video cut: exactly the length you need, cut and looped on bar lines, the drop on the second you pick and a fade that ends on a beat.",
+  "author": {
+    "name": "Emin Budak",
+    "url": "https://eminbudak.com"
+  },
+  "homepage": "https://github.com/EminBudak/musicfit",
+  "repository": "https://github.com/EminBudak/musicfit",
+  "license": "MIT",
+  "keywords": ["music", "audio", "video", "beat", "loudness"]
+}

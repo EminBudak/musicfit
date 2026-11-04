@@ -1,0 +1,42 @@
+{
+  "name": "musicfit",
+  "version": "0.1.0",
+  "description": "Fit a music track to a video cut: exactly the length you need, cut and looped on bar lines, the drop on the second you pick, a fade that ends on a beat, ducked under a voice and at the right loudness.",
+  "license": "MIT",
+  "author": "Emin Budak",
+  "homepage": "https://github.com/EminBudak/musicfit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EminBudak/musicfit.git"
+  },
+  "bugs": "https://github.com/EminBudak/musicfit/issues",
+  "bin": {
+    "musicfit": "skills/musicfit/scripts/musicfit.js"
+  },
+  "main": "skills/musicfit/scripts/lib/fit.js",
+  "files": [
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "keywords": [
+    "music",
+    "audio",
+    "video",
+    "beat-detection",
+    "bpm",
+    "loudness",
+    "ffmpeg",
+    "remotion",
+    "agent-skills",
+    "claude-code",
+    "codex",
+    "cursor"
+  ]
+}

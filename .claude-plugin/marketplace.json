@@ -1,0 +1,23 @@
+{
+  "name": "musicfit",
+  "description": "musicfit: fit a music track to a video cut, exactly the length you need, cut on bar lines, with the drop on the second you pick.",
+  "owner": {
+    "name": "Emin Budak"
+  },
+  "plugins": [
+    {
+      "name": "musicfit",
+      "description": "Makes a music track exactly as long as a video by cutting or looping whole bars, lands its drop on a chosen second, ends it on a beat, ducks it under a voice and sets its loudness, with cues.json (every beat and bar in seconds and frames) for the edit.",
+      "version": "0.1.0",
+      "source": "./",
+      "skills": ["./skills/musicfit"],
+      "author": {
+        "name": "Emin Budak"
+      },
+      "homepage": "https://github.com/EminBudak/musicfit",
+      "repository": "https://github.com/EminBudak/musicfit",
+      "license": "MIT",
+      "keywords": ["skills", "music", "audio", "video", "beat", "loudness"]
+    }
+  ]
+}

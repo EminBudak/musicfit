@@ -1,0 +1,44 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      - name: Check the tag matches the version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME#v}" = "$version" || { echo "Release tag $GITHUB_REF_NAME does not match package.json version $version"; exit 1; }
+          for file in .claude-plugin/marketplace.json .codex-plugin/plugin.json plugin.json; do
+            found="$(node -p "const m = require('./$file'); (m.plugins ? m.plugins[0] : m).version")"
+            test "$found" = "$version" || { echo "$file says $found, package.json says $version"; exit 1; }
+          done
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Test
+        run: npm test
+
+      - name: Publish with provenance
+        run: npm publish --provenance --access public
