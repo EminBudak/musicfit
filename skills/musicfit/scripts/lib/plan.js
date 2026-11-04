@@ -217,6 +217,14 @@ function plan(a, { length, hit, end = "auto", fade }) {
   const slotTime = (j) => best.head.q + j * unit;
   const slots = path.length;
   const endsNaturally = best.endSlot >= 0;
+  // A drop asked for late in a track with little before it: that little
+  // plays over and over until the drop, which is worth knowing.
+  if (drop && !energy && dropSlot > 0) {
+    const plays = new Map();
+    for (let j = 0; j < Math.min(dropSlot, slots); j++) plays.set(path[j], (plays.get(path[j]) || 0) + 1);
+    const times = Math.max(...plays.values());
+    if (times >= 3) warnings.push(`Only ${(drop.time - bars[first].start).toFixed(1)} s of the track comes before its drop, so to land it at ${hit.toFixed(2)} s some of those bars play ${times} times. An earlier --hit, or --drop at a later moment of the track, repeats less.`);
+  }
 
   // Runs of bars that follow each other in the source become segments.
   const segments = [];

@@ -26,15 +26,19 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
   const length = options.length;
   const downbeats = r.beats.filter((b) => b.downbeat).map((b) => b.time);
   // The first segment plays from the top: when its first bar comes later,
-  // what comes before that bar in the track plays first.
-  const segments = r.segments.map((s, i) => ({
-    from: i === 0 ? 0 : r3(s.outStart),
-    to: r3(Math.min(length, s.outEnd)),
-    fromFrame: i === 0 ? 0 : frame(s.outStart),
-    toFrame: frame(Math.min(length, s.outEnd)),
-    source: [r3(i === 0 ? Math.max(0, r.startSource) : s.srcStart), r3(s.srcEnd)],
-    sourceBars: a.mode === "energy" ? null : [s.firstBar + 1, s.lastBar + 1],
-  }));
+  // what comes before that bar in the track plays first. When even the
+  // top of the track comes later, the file is silent until it does.
+  const segments = r.segments.map((s, i) => {
+    const from = i === 0 ? Math.max(0, -r.startSource) : s.outStart;
+    return {
+      from: r3(from),
+      to: r3(Math.min(length, s.outEnd)),
+      fromFrame: frame(from),
+      toFrame: frame(Math.min(length, s.outEnd)),
+      source: [r3(i === 0 ? Math.max(0, r.startSource) : s.srcStart), r3(s.srcEnd)],
+      sourceBars: a.mode === "energy" ? null : [s.firstBar + 1, s.lastBar + 1],
+    };
+  });
   const seams = r.seams.map((s, i) => ({
     time: r3(s.out),
     frame: frame(s.out),

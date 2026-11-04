@@ -36,6 +36,27 @@ test("a start part way into a bar keeps every cue on the grid", async () => {
   assert.ok(drop && Math.abs(drop.time - cues.drop.time) < 0.02, `the drop's section is at ${drop && drop.time}, the drop at ${cues.drop.time}`);
 });
 
+test("a start with silence before the music maps each segment onto as much of the track", async () => {
+  // Twenty seconds before the drop needs more than the bars before it, so
+  // the file opens with silence and the intro comes round again.
+  const { file } = fixture("house");
+  const { cues, analysis } = await fit(file, { ...defaults, length: 30, hit: 20, out: outDir("silent-head") });
+  assert.equal(cues.start.kind, "silence");
+  const [first] = cues.segments;
+  assert.ok(first.from > 0.1, `the track comes in at ${first.from}`);
+  const bar = analysis.bars[first.sourceBars[0] - 1].start;
+  assert.ok(Math.abs(first.from + bar - first.source[0] - cues.start.music) < 0.002, `its first bar at ${first.from + bar - first.source[0]}, not ${cues.start.music}`);
+  for (const s of cues.segments.slice(0, -1)) assert.ok(Math.abs(s.to - s.from - (s.source[1] - s.source[0])) < 0.002, `${s.from} to ${s.to} plays ${s.source}`);
+  assert.ok(!cues.warnings.some((w) => /times\. An earlier --hit/.test(w)), "playing the intro once more is no news");
+});
+
+test("a drop asked for far later than the track has music before it says how often that music repeats", async () => {
+  const { file } = fixture("house");
+  const { cues } = await fit(file, { ...defaults, length: 60, hit: 52, out: outDir("late-drop") });
+  assert.equal(cues.drop.time, 52);
+  assert.ok(cues.warnings.some((w) => /Only 15\.\d s of the track comes before its drop, so to land it at 52\.00 s some of those bars play [3-9] times/.test(w)), cues.warnings.join(" | "));
+});
+
 test("a target louder than the peaks allow stops short instead of clipping", async () => {
   const { file } = fixture("cinematic");
   const { cues } = await fit(file, { ...defaults, length: 30, lufs: -6, out: outDir("loud") });
