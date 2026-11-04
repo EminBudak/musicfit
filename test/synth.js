@@ -256,6 +256,9 @@ const PARTS = {
   hats8: () => Array.from({ length: 8 }, (_, i) => [i / 2, "hat", { level: i % 2 ? 0.45 : 0.7, seed: 20 + i }]),
   hats16: () => Array.from({ length: 16 }, (_, i) => [i / 4, "hat", { level: i % 4 === 0 ? 0.6 : i % 2 ? 0.25 : 0.4, seed: 40 + i }]),
   openhat: () => [0.5, 1.5, 2.5, 3.5].map((b, i) => [b, "hat", { open: true, level: 0.55, seed: 60 + i }]),
+  clapOff: () => [0.5, 1.5, 2.5, 3.5].map((b, i) => [b, "clap", { level: 0.8, seed: 70 + i }]),
+  // Three, three and two sixteenths, twice a bar.
+  tresillo: () => [0, 0.75, 1.5, 2, 2.75, 3.5].map((b, i) => [b, "clap", { level: i % 3 ? 0.75 : 0.9, seed: 80 + i }]),
   snareRoll: ({ bar, of }) => {
     const step = bar < of / 2 ? 1 : bar < of - 1 ? 0.5 : 0.25;
     const events = [];
@@ -294,8 +297,9 @@ const QUALITIES = { maj: [0, 4, 7], min: [0, 3, 7] };
 //   humanize: seconds of random timing on every hit,
 //   drift: how far the tempo wanders, e.g. 0.01 for 1%,
 //   sections: [{ bars, parts: [...], drop: true }],
-//   ending: "hit" (a final hit that rings out), "fade" (fades over the last
-//           4 bars) or "cut" (stops dead mid-bar),
+//   ending: "hit" (a final hit that rings out), "stop" (the same with a
+//           fill inside the hit's beat), "fade" (fades over the last 4 bars)
+//           or "cut" (stops dead mid-bar),
 // }
 function song(spec) {
   const rate = spec.rate || 48000;
@@ -328,7 +332,8 @@ function song(spec) {
     return pos;
   };
 
-  const ringOut = spec.ending === "hit" ? 4.5 : 0;
+  const hits = spec.ending === "hit" || spec.ending === "stop";
+  const ringOut = hits ? 4.5 : 0;
   const endBeat = pickup + totalBars * meter;
   const cutAt = spec.ending === "cut" ? beatAt(endBeat - 1.37) : null;
   const seconds = (cutAt || beatAt(endBeat)) + ringOut + 0.05;
@@ -397,7 +402,7 @@ function song(spec) {
     }
     barIndex += section.bars;
   }
-  if (spec.ending === "hit") {
+  if (hits) {
     const time = beatAt(beatPos);
     truth.finalHit = time;
     place(time, "crash", {});
@@ -405,13 +410,15 @@ function song(spec) {
     place(time, "boom", { level: 0.5 });
     place(time, "pad", { notes: chords[0], dur: 2.2, level: 0.7 });
     place(time, "bass", { note: chords[0][0] - 12, dur: 1.6, cutoff: 300 });
+    // The drummer plays on to the end of the beat: three sixteenths.
+    if (spec.ending === "stop") [0.25, 0.5, 0.75].forEach((pos, i) => place(beatAt(beatPos + pos), "snare", { level: 0.9 - i * 0.15, seed: 30 + i }));
   }
   for (let i = 0; i < beats.length && beats[i] < (cutAt || beatAt(endBeat)) - 1e-6; i++) {
     if (i < pickup) continue;
     truth.beats.push(beats[i]);
     if ((i - pickup) % meter === 0) truth.downbeats.push(beats[i]);
   }
-  if (spec.ending === "hit") {
+  if (hits) {
     truth.beats.push(truth.finalHit);
     truth.downbeats.push(truth.finalHit);
   }

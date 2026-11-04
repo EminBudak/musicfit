@@ -220,7 +220,49 @@ function regularize(beats) {
   // little around even a perfect grid. The tempo holds when a straight line
   // fits about as well as a line through each beat's neighbours.
   if (inliers > 0.8 && (rms < 1.5 || rms < localRms * 1.3 + 0.5)) return { frames: beats.map((_, i) => line.start + line.slope * i), steady: true, period: line.slope, spread: rms };
+  // A few beats the tracker put on an off-beat or a fill pull that line
+  // away, and so does a skipped beat. The straight grid that four beats in
+  // five sit on (within two frames), searched by period and phase, is then
+  // the tempo, and the strays go back onto it.
+  const grid = steadyGrid(beats);
+  if (grid) return grid;
   return { frames: local, steady: false, period: dsp.median(local.slice(1).map((b, i) => b - local[i])), spread: rms };
+}
+
+function steadyGrid(beats) {
+  const n = beats.length;
+  if (n < 8) return null;
+  const step = dsp.median(beats.slice(1).map((b, i) => b - beats[i]));
+  const near = (b, p, phase) => Math.abs(b - phase - Math.round((b - phase) / p) * p) <= 2;
+  // On a long track 400 beats spread over it are enough to find the grid.
+  const sample = n > 400 ? Array.from({ length: 400 }, (_, i) => beats[Math.floor((i * n) / 400)]) : beats;
+  let best = { on: -1 };
+  for (let p = step * 0.98; p <= step * 1.02; p += 0.005) {
+    for (let phase = 0; phase < p; phase += 0.25) {
+      let on = 0;
+      for (const b of sample) if (near(b, p, phase)) on++;
+      if (on > best.on) best = { on, p, phase };
+    }
+  }
+  if (best.on < 0.8 * sample.length) return null;
+  // Least squares over the beats on it, by their place on the grid.
+  let sk = 0, sb = 0, skk = 0, skb = 0, m = 0;
+  for (const b of beats) {
+    if (!near(b, best.p, best.phase)) continue;
+    const k = Math.round((b - best.phase) / best.p);
+    sk += k;
+    sb += b;
+    skk += k * k;
+    skb += k * b;
+    m++;
+  }
+  const slope = (m * skb - sk * sb) / (m * skk - sk * sk);
+  const start = (sb - slope * sk) / m;
+  let spread = 0;
+  for (const b of beats) if (near(b, best.p, best.phase)) spread += (b - start - Math.round((b - start) / slope) * slope) ** 2;
+  const frames = [];
+  for (let k = Math.round((beats[0] - start) / slope); k <= Math.round((beats[n - 1] - start) / slope); k++) frames.push(start + slope * k);
+  return { frames, steady: true, period: slope, spread: Math.sqrt(spread / m) };
 }
 
 // Beats on either side of the tracked ones, at the local period, so quiet
@@ -242,9 +284,17 @@ function extend(frames, from, to) {
 // since intros and breaks often have no drums at all.
 function level(feat, bpm, from, to) {
   const period = (60 * FPS) / bpm;
-  const { beats } = trackBeats(feat.odf, period, from, to);
+  let { beats } = trackBeats(feat.odf, period, from, to);
   if (beats.length < 8) return null;
   const strength = (arr, b) => dsp.peakNear(arr, b, 3).value;
+  // Claps or hats on every off-beat, louder than the kick under them, pull
+  // the tracker half a beat over. The kick is where people tap, so when
+  // the kicks all fall between the beats found, the beats move onto them.
+  const kickRatio = (bs) => dsp.mean(bs.slice(1).map((b, i) => strength(feat.low, (b + bs[i]) / 2))) / Math.max(1e-9, dsp.mean(bs.map((b) => strength(feat.low, b))));
+  if (kickRatio(beats) > 1.5) {
+    const between = beats.slice(1).map((b, i) => Math.round((b + beats[i]) / 2));
+    if (kickRatio(between) < 0.8) beats = between;
+  }
   const full = beats.map((b) => strength(feat.odf, b));
   const on = dsp.mean(full);
   const typical = dsp.median(full);
@@ -279,7 +329,10 @@ function level(feat, bpm, from, to) {
   // faster than this.
   const lowBetween = dsp.mean(beats.slice(1).map((b, i) => strength(feat.low, (b + beats[i]) / 2)));
   const kickBetween = lowBetween / Math.max(1e-9, dsp.mean(low));
-  return { bpm, beats, on, backbeat: dsp.percentile(turns, 75), kickBetween };
+  // How far the steps between beats stray from the period: a tempo the
+  // music does not have makes the tracker hop between kicks and claps.
+  const stray = dsp.median(beats.slice(1).map((b, i) => Math.abs(b - beats[i] - period))) / period;
+  return { bpm, beats, on, backbeat: dsp.percentile(turns, 75), kickBetween, stray };
 }
 
 // The tempo: the period the onsets repeat at most strongly, then which of
@@ -308,14 +361,18 @@ function estimateTempo(feat, from, to, { bpm: forced } = {}) {
   // The strongest period is the beat, or a bar, or a run of even notes:
   // the beat is a whole fraction or multiple of it.
   const ratios = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 1, 3 / 2, 2, 3, 4, 6];
-  const candidates = ratios.map((r) => ({ bpm: best.bpm * r, odd: r === 1 / 3 || r === 2 / 3 || r === 3 / 2 || r === 3 || r === 6 })).filter((c) => c.bpm >= 50 && c.bpm <= 210);
+  const candidates = ratios.map((r) => ({ bpm: best.bpm * r, odd: r === 1 / 3 || r === 2 / 3 || r === 3 / 2 || r === 3 || r === 6, offBeats: r === 1 / 3 || r === 2 / 3 })).filter((c) => c.bpm >= 50 && c.bpm <= 210);
   const levels = candidates.map((c) => Object.assign(level(feat, c.bpm, from, to) || {}, c)).filter((lv) => lv.beats);
   if (!levels.length) return { chosen: null, acf, pulse: best.value, alternatives: [], family: best.bpm };
   const meanOdf = dsp.mean(odf) || 1;
   for (const lv of levels) {
-    lv.score = Math.log(prior(lv.bpm)) + 1.6 * lv.backbeat + 0.4 * Math.log(Math.max(lv.on, 1e-9) / meanOdf) - 1.5 * Math.max(0, lv.kickBetween - 0.6);
-    // A tempo in a three-to-two relation with the strongest period has to
-    // be clearly better.
+    // A tempo two thirds (or a third) of the strongest period puts every
+    // other beat halfway between two of its pulses, on an off-beat, and a
+    // kick then a hat taking turns reads as a backbeat that is not there.
+    // Beats that hop instead of keeping a pulse show one too.
+    const backbeat = lv.offBeats || lv.stray > 0.05 ? 0 : lv.backbeat;
+    lv.score = Math.log(prior(lv.bpm)) + 1.6 * backbeat + 0.4 * Math.log(Math.max(lv.on, 1e-9) / meanOdf) - 1.5 * Math.max(0, lv.kickBetween - 0.6);
+    // Such a tempo has to be clearly better.
     if (lv.odd) lv.score -= 0.3;
   }
   levels.sort((a, b) => b.score - a.score);
@@ -773,8 +830,11 @@ function findStartEnd(result, feat, audible) {
   const ending = { kind: "none", audibleEnd: end / FPS, fadedFrom: bars.length };
   if (hitBeat >= 0) {
     const hitFrame = Math.round(beats[hitBeat] * FPS);
+    // Notes inside the hit's own beat (the end of a fill, an off-beat on
+    // the last chord) still belong to the hit; after that, nothing.
+    const nextBeat = hitBeat + 1 < beats.length ? Math.round(beats[hitBeat + 1] * FPS) - 3 : hitFrame + 15;
     let after = 0;
-    for (let f = hitFrame + 15; f <= end; f++) after = Math.max(after, feat.odf[f]);
+    for (let f = Math.max(hitFrame + 15, nextBeat); f <= end; f++) after = Math.max(after, feat.odf[f]);
     const tail = (end - hitFrame) / FPS;
     const atHit = dsp.mean(Float64Array.from(dbs.slice(hitFrame, hitFrame + 10)));
     const atEnd = dsp.mean(Float64Array.from(dbs.slice(Math.max(hitFrame, end - 20), end + 1)));

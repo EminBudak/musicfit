@@ -59,6 +59,27 @@ test("bar lines run on through an intro with no drums, and the drop is the bar t
   assert.ok(Math.abs(a.drop.time - truth.drop) < 0.05, `drop at ${a.drop.time}, not ${truth.drop}`);
 });
 
+test("a band that plays on to the end of the last beat and stops still ends on its own last hit", async () => {
+  const { a, truth } = await read("stop");
+  assert.equal(a.ending.kind, "hit");
+  assert.ok(Math.abs(a.ending.hit - truth.finalHit) < 0.05, `last hit at ${a.ending.hit}, not ${truth.finalHit}`);
+});
+
+test("claps on every off-beat over a kick on every beat: the tempo is the kick's, and so are the beats", async () => {
+  for (const [name, bpm] of [["offbeat", 120], ["offbeat118", 118]]) {
+    const { a, truth } = await read(name);
+    assert.ok(bpmNear(a.tempo.bpm, bpm), `${name}: tempo ${a.tempo.bpm}`);
+    assert.ok(matched(truth.beats.filter((t) => t > 8), a.beats, 0.03) >= 0.95, `${name}: the beats are not on the kicks`);
+  }
+});
+
+test("a steady tempo stays steady when a syncopated part pulls a few tracked beats off the grid", async () => {
+  const { a, truth } = await read("tresillo");
+  assert.ok(a.tempo.steady, a.warnings.join(" | "));
+  assert.ok(bpmNear(a.tempo.bpm, 104), `tempo ${a.tempo.bpm}`);
+  assert.ok(matched(truth.beats, a.beats, 0.02) >= 0.98, "the beats are not on the grid");
+});
+
 test("a wandering tempo is followed beat by beat, with a warning", async () => {
   const { a, truth } = await read("drift");
   assert.equal(a.tempo.steady, false);

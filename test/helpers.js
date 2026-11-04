@@ -54,6 +54,26 @@ const SPECS = {
     bpm: 104, seed: 27, drift: 0.012, humanize: 0.008, ending: "fade",
     sections: [{ bars: 4, parts: ["pad", "hats8"] }, { bars: 12, parts: ["kickPop", "snare", "hats8", "bass8", "pad"], drop: true }],
   },
+  // A kick on every beat and a clap on every off-beat, louder than it.
+  offbeat: {
+    bpm: 120, seed: 45, ending: "hit",
+    sections: [{ bars: 4, parts: ["pad", "clapOff"] }, { bars: 12, parts: ["kick4", "clapOff", "pad", "bassLong"], drop: true }],
+  },
+  // A steady 104 whose middle claps three, three and two sixteenths with no
+  // kick, which pulls a few tracked beats off the grid.
+  tresillo: {
+    bpm: 104, seed: 63, ending: "hit",
+    sections: [{ bars: 4, parts: ["pad", "tresillo"] }, { bars: 8, parts: ["kickPop", "snare", "hats8", "pad"], drop: true }, { bars: 6, parts: ["tresillo", "hats16", "pad", "bass8"] }, { bars: 4, parts: ["kickPop", "snare", "hats8", "pad"] }],
+  },
+  // The last downbeat, a fill to the end of its beat, then the ring-out.
+  stop: {
+    bpm: 100, seed: 47, ending: "stop",
+    sections: [{ bars: 4, parts: ["pad", "hats8"] }, { bars: 8, parts: ["kickPop", "snare", "hats8", "bass8", "pad"], drop: true }],
+  },
+  offbeat118: {
+    bpm: 118, seed: 46, ending: "hit",
+    sections: [{ bars: 4, parts: ["padDark", "hats8"] }, { bars: 12, parts: ["kick4", "clapOff", "hats8", "pad", "bassLong"], drop: true }],
+  },
 };
 
 const made = new Map();
