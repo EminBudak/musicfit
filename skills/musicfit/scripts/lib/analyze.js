@@ -300,16 +300,21 @@ function level(feat, bpm, from, to) {
   const typical = dsp.median(full);
   const low = beats.map((b) => strength(feat.low, b));
   const upper = beats.map((b) => strength(feat.mid, b) + strength(feat.high, b));
+  const high = beats.map((b) => strength(feat.high, b));
   const turns = [];
+  const turnOf = (s) => (s[0] - s[1]) / (s[0] + s[1] + 1e-9);
   for (let w = 0; w + 16 <= beats.length || (w === 0 && beats.length >= 8); w += 8) {
     const end = Math.min(beats.length, w + 16);
-    const sums = { low: [0, 0], upper: [0, 0] };
+    const sums = { low: [0, 0], upper: [0, 0], high: [0, 0] };
     for (let i = w; i < end; i++) {
       sums.low[i % 2] += low[i];
       sums.upper[i % 2] += upper[i];
+      sums.high[i % 2] += high[i];
     }
-    const lowTurn = (sums.low[0] - sums.low[1]) / (sums.low[0] + sums.low[1] + 1e-9);
-    const upTurn = (sums.upper[0] - sums.upper[1]) / (sums.upper[0] + sums.upper[1] + 1e-9);
+    const lowTurn = turnOf(sums.low);
+    // A snare or clap shows best above 3.5 kHz: lower down, chords and the
+    // kick's click can fill the beats it leaves out and hide its turns.
+    const upTurn = [turnOf(sums.upper), turnOf(sums.high)].reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a));
     // Kick on one parity and snare on the other, or a kick on every beat
     // with a snare or clap on every other one. Kick and snare both stronger
     // on the same parity is a beat and its off-beat, not a backbeat.

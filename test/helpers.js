@@ -65,6 +65,12 @@ const SPECS = {
     bpm: 104, seed: 63, ending: "hit",
     sections: [{ bars: 4, parts: ["pad", "tresillo"] }, { bars: 8, parts: ["kickPop", "snare", "hats8", "pad"], drop: true }, { bars: 6, parts: ["tresillo", "hats16", "pad", "bass8"] }, { bars: 4, parts: ["kickPop", "snare", "hats8", "pad"] }],
   },
+  // Boom bap at 90: piano chords on 1 and 3, a kick off the beat and a
+  // bright snare on 2 and 4 that shows above 4 kHz more than below.
+  boomBap: {
+    bpm: 90, seed: 75, ending: "hit", swing: 0.1,
+    sections: [{ bars: 2, parts: ["pianoChords", "vinyl"] }, { bars: 12, parts: ["kickBoom", "snareBright", "pianoChords", "rhodes", "bassLong", "vinyl"], drop: true }],
+  },
   // The last downbeat, a fill to the end of its beat, then the ring-out.
   stop: {
     bpm: 100, seed: 47, ending: "stop",

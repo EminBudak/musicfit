@@ -257,6 +257,8 @@ const PARTS = {
   hats16: () => Array.from({ length: 16 }, (_, i) => [i / 4, "hat", { level: i % 4 === 0 ? 0.6 : i % 2 ? 0.25 : 0.4, seed: 40 + i }]),
   openhat: () => [0.5, 1.5, 2.5, 3.5].map((b, i) => [b, "hat", { open: true, level: 0.55, seed: 60 + i }]),
   clapOff: () => [0.5, 1.5, 2.5, 3.5].map((b, i) => [b, "clap", { level: 0.8, seed: 70 + i }]),
+  // A crisp snare on 2 and 4 whose noise sits mostly above 4 kHz.
+  snareBright: () => [1, 3].map((b, i) => [b, "hat", { open: true, level: 2.2, seed: 90 + i }]),
   // Three, three and two sixteenths, twice a bar.
   tresillo: () => [0, 0.75, 1.5, 2, 2.75, 3.5].map((b, i) => [b, "clap", { level: i % 3 ? 0.75 : 0.9, seed: 80 + i }]),
   snareRoll: ({ bar, of }) => {

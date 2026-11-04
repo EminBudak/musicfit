@@ -59,6 +59,13 @@ test("bar lines run on through an intro with no drums, and the drop is the bar t
   assert.ok(Math.abs(a.drop.time - truth.drop) < 0.05, `drop at ${a.drop.time}, not ${truth.drop}`);
 });
 
+test("boom bap whose snare shows mostly up high, under chords on 1 and 3, is read at its own tempo", async () => {
+  const { a, truth } = await read("boomBap");
+  assert.ok(bpmNear(a.tempo.bpm, 90), `tempo ${a.tempo.bpm}`);
+  assert.equal(a.meter, 4);
+  assert.ok(matched(truth.beats.filter((t) => t > 3), a.beats, 0.035) >= 0.95, "the beats are not on the grid");
+});
+
 test("a band that plays on to the end of the last beat and stops still ends on its own last hit", async () => {
   const { a, truth } = await read("stop");
   assert.equal(a.ending.kind, "hit");
