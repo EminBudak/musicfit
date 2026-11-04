@@ -34,5 +34,7 @@ node <skill>/scripts/musicfit.js track.mp3 --length 32 --hit 27.5 --fps 30 --out
 - A warning that the tempo could be half or double means the bar lines may be off. If the seams sound like they skip, run again with `--bpm` set to the other tempo.
 - "No steady beat" means the track is ambient or free; musicfit then joins its parts with one-second crossfades where they sound alike. Listen to every seam.
 - If the drop it picked is the wrong one, run `--analyze` and pass `--drop` with one of the candidates in `cues.json` (`source.dropCandidates`).
+- A note that some bars play several times means `--hit` is much later than the track's own drop, so its intro repeats. Suggest an earlier `--hit`, or `--drop` with a later candidate.
+- With no steady beat, `beats` and `bars` in `cues.json` are empty lists. Time the edit by `hits` and `seams` instead.
 - The track can come from any music model. Ask for an instrumental a little longer than the video: musicfit shortens more gracefully than it lengthens, and its seams follow bars, not sung words.
 - Never say a track is cleared for use; musicfit does not check rights.

@@ -124,10 +124,12 @@ It needs Node 22 or newer and ffmpeg (`brew install ffmpeg`, `sudo apt install f
 
 - One hit per run. A second moment that must land on a beat can use the bar frames in `cues.json`.
 - The tempo can be read as half or double the real one, the main failure of beat tracking. musicfit warns when both are likely and then cuts only in pairs of bars, which stays on the bar lines either way; `--bpm` settles it.
+- When nothing in a track marks the first beat of the bar, the bar lines can come out a beat off. musicfit says when it is unsure, and the cuts still keep the beat, since they skip whole bars.
+- A groove whose loudest hits fall between the beats over a sparse kick, as in some dembow and afrobeats patterns, can be read half a beat off without a warning. Listen to the first seam.
 - Tracks with no steady beat (ambient, rubato piano) are joined with one-second crossfades where they sound alike, not on bar lines. Listen to every seam.
 - A tempo that changes a lot within the track, or a bar of 2/4 in a 4/4 song, can put a seam a beat off.
 - Seams follow bars and sound, not words: in a song with singing a cut can fall in the middle of a line. An instrumental fits best.
-- Lengthening loops bars the track already has, so a 30 second track stretched to 3 minutes repeats. Ask the music model for a little more than you need.
+- Lengthening loops bars the track already has, so a 30 second track stretched to 3 minutes repeats, and so does the intro when the drop is asked for much later than the track has it (musicfit says how many times). Ask the music model for a little more than you need.
 - It does not change the tempo or the pitch, and it does not check whether you may use the track.
 
 ## See also
