@@ -10,7 +10,7 @@ npx musicfit@latest track.mp3 --length 32 --hit 27.5 --fps 30
 
 AI music models ignore the length you ask for. Ask for 30 seconds and you may get 47, or two minutes, and the drop the edit was built around comes whenever it comes. So the track gets cut at the video's last frame and stops in the middle of a bar, or it fades out on no beat in particular, and the big hit lands a second after the logo. Fixing that by hand means finding the bar lines in a waveform, cutting on them, nudging crossfades and doing the arithmetic for where the drop has to go. musicfit does it the way a music editor would: it finds the beats and the bar lines, cuts or loops whole bars where they sound alike, keeps the start and the ending of the track, and tells you which seconds to listen to.
 
-The track can come from any music model, and [Wiro](https://wiro.ai) has several.
+The track can come from any music model, and [Wiro](https://wiro.ai/explore/music-generation) has several.
 
 ## What you get
 
