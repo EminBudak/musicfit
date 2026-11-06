@@ -1,6 +1,6 @@
 {
   "name": "musicfit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Fit a music track to a video cut: exactly the length you need, cut and looped on bar lines, the drop on the second you pick and a fade that ends on a beat.",
   "author": {
     "name": "Emin Budak",
