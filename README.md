@@ -135,7 +135,7 @@ It needs Node 22 or newer and ffmpeg (`brew install ffmpeg`, `sudo apt install f
 ## See also
 
 - [launch-film](https://github.com/EminBudak/launch-film) turns a site into a short launch film, rendered on your machine.
-- [easyscreenshot](https://github.com/EminBudak/easyscreenshot) saves clean screenshots of a website's pages.
+- [easyscreenshotkit](https://github.com/EminBudak/easyscreenshotkit) saves clean screenshots of a website's pages.
 - [easybrandkit](https://github.com/EminBudak/easybrandkit) saves a site's real logo files, colors and fonts as a brand kit.
 
 ## License
