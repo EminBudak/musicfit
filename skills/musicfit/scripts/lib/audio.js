@@ -40,6 +40,9 @@ const INFO = /^(Input|Output) #\d|^Stream (mapping|#)|^Guessed Channel Layout|^E
 // the last line it printed that says something.
 function reason(stderr, code, signal) {
   if (signal) return `ffmpeg was stopped (${signal})`;
+  // ffmpeg stopped by a signal it caught, as Ctrl-C.
+  const caught = /received signal (\d+)/.exec(stderr || "");
+  if (caught) return `ffmpeg was stopped (signal ${caught[1]})`;
   const lines = String(stderr || "")
     .split(/\r?\n|\r/)
     .filter((line) => line.trim() && !/^\s/.test(line))

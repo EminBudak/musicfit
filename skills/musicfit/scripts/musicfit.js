@@ -190,9 +190,11 @@ function summary({ dir, cues: c }) {
 
 // A run stopped with Ctrl-C or a signal stops its ffmpeg and removes what
 // it had made, so the out folder is left as it was, says so, and ends by
-// that signal. A second signal, like the copy makersmcp's supervisor
-// passes on a moment after the one its process group got, finds the
-// listener still there and changes nothing.
+// that signal. It says so too when its ffmpeg was stopped a moment before
+// it, by the same Ctrl-C, and the run has just failed over that. A second
+// signal, like the copy makersmcp's supervisor passes on a moment after
+// the one its process group got, finds the listener still there and
+// changes nothing.
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
 let stopping = false;
 
@@ -262,9 +264,10 @@ async function main() {
     process.stdout.write(options.json ? JSON.stringify(result.cues, null, 2) + "\n" : summary(result) + "\n");
   } catch (err) {
     // When the whole process group is stopped, as with Ctrl-C, ffmpeg can
-    // end before this process hears its own signal: a failed ffmpeg gives
-    // that signal a moment to come. A stopped run has said so and ends by it.
-    if (err.stderr !== undefined) await new Promise((resolve) => setTimeout(resolve, 200));
+    // end before this process hears its own signal: an ffmpeg that a
+    // signal stopped gives that signal a moment to come. A stopped run has
+    // said so and ends by it.
+    if (err.signal || /received signal \d+/.test(err.stderr || "")) await new Promise((resolve) => setTimeout(resolve, 1000));
     if (stopping) return;
     fail(err.message, 1);
   }

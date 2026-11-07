@@ -41,21 +41,19 @@ function inputSection(said) {
 
 // The video's picture as its packets give it: how long it is, its frames,
 // its frame rate and whether that holds steady, the codec of its picture
-// and of its sound, and the mark of musicfit when musicfit made it. With
-// `scratch`, one frame is copied into an MP4 there too, to see that an MP4
-// holds the picture as it is. Refused with the reason when the video
-// cannot be read, is cut short or damaged, has no picture or a still one,
-// or holds a picture an MP4 cannot take without encoding it again.
-async function probe(file, { scratch = null } = {}) {
+// and of its sound, and the mark of musicfit when musicfit made it. One
+// frame is copied into an MP4 too, into a pipe, to see that an MP4 holds
+// the picture as it is. Refused with the reason when the video cannot be
+// read, is cut short or damaged, has no picture or a still one, or holds a
+// picture an MP4 cannot take without encoding it again.
+async function probe(file) {
   const name = path.basename(file);
   const size = (fs.statSync(file, { throwIfNoEntry: false }) || {}).size;
   if (size === 0) throw new Error(`Cannot read ${file}: it is empty`);
   let crc;
   let said;
   try {
-    const args = ["-v", "info", "-nostats", "-i", file, "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"];
-    if (scratch) args.push("-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "mp4", "-y", scratch);
-    const { chunks, stderr } = await run(args);
+    const { chunks, stderr } = await run(["-v", "info", "-nostats", "-i", file, "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"]);
     crc = Buffer.concat(chunks).toString("utf8");
     said = stderr;
   } catch (err) {
@@ -66,11 +64,7 @@ async function probe(file, { scratch = null } = {}) {
     if (/moov atom not found/.test(why) && !/detected only with low score/.test(why)) throw new Error(`Cannot read ${file}: it is cut short or damaged, so ffmpeg finds no index in it`);
     if (/Invalid data found|moov atom not found/.test(why)) throw new Error(`Cannot read ${file}: ffmpeg does not know this format`);
     if (/matches no streams/.test(why)) throw new Error(`${name} has no picture to lay the music under`);
-    const tag = /Could not find tag for codec (\w+)/.exec(why);
-    if (tag) throw new Error(`${name}'s picture is ${tag[1]}, which an MP4 cannot hold without encoding it again: give --video an H.264 or HEVC copy of it`);
     throw err;
-  } finally {
-    if (scratch) fs.rmSync(scratch, { force: true });
   }
 
   const input = inputSection(said);
@@ -119,6 +113,14 @@ async function probe(file, { scratch = null } = {}) {
   }
   if (frames <= 1 || /^(image2|image2pipe|\w+_pipe)$/.test(format) || !(seconds > start) || !step) throw new Error(`${name} is a still picture, not a video`);
   const constant = gaps.every((g) => Math.abs(g - step) <= Math.max(1, step * 0.01));
+
+  try {
+    await run(["-v", "error", "-i", file, "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+delay_moov", "pipe:1"]);
+  } catch (err) {
+    const tag = /Could not find tag for codec (\w+)/.exec(err.stderr || err.message);
+    if (tag) throw new Error(`${name}'s picture is ${tag[1]}, which an MP4 cannot hold without encoding it again: give --video an H.264 or HEVC copy of it`);
+    throw err;
+  }
 
   // A steady rate from the first frame to the last, which a timebase in
   // whole milliseconds rounds no frame of; else frames over the time.

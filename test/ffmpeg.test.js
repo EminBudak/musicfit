@@ -58,6 +58,8 @@ test("the line that says why is found in what ffmpeg 4.4 and 8 print", () => {
   assert.equal(reason("fitted.wav: No space left on device\n", 1), "ffmpeg: fitted.wav: No space left on device");
   assert.equal(reason("kits ffmpeg: in/a%d.wav: an input named with % or ending in .y is not opened\n", 1), "kits ffmpeg: in/a%d.wav: an input named with % or ending in .y is not opened");
   assert.equal(reason("", 1), "ffmpeg exited with 1");
+  // Stopped by a signal it caught, as Ctrl-C to the whole process group.
+  assert.equal(reason("Exiting normally, received signal 2.\n", 255), "ffmpeg was stopped (signal 2)");
   assert.equal(reason("", null, "SIGKILL"), "ffmpeg was stopped (SIGKILL)");
 });
 

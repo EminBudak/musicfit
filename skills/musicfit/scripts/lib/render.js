@@ -388,10 +388,16 @@ const PHASES = [0.25, 0.5, 0.75].map((frac) => {
   return k;
 });
 
-function truePeaks(x) {
+// A long sound takes seconds to scan, so the scan stops every half million
+// samples to let a stop (Ctrl-C, a signal) be heard.
+const CHUNK = 1 << 19;
+const breathe = () => new Promise((resolve) => setImmediate(resolve));
+
+async function truePeaks(x) {
   const n = x.length;
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
+    if (i % CHUNK === CHUNK - 1) await breathe();
     let peak = Math.abs(x[i]);
     if (i >= TAPS - 1 && i + TAPS < n) {
       for (const k of PHASES) {
@@ -410,11 +416,11 @@ function truePeaks(x) {
 // averaged over 5 ms, so it glides down before a peak and is low enough on
 // it; it comes back over about 80 ms. No step is ever a jump, so it adds no
 // click.
-function limit({ L, R }, ceiling) {
+async function limit({ L, R }, ceiling) {
   const n = L.length;
   const ahead = Math.round(0.005 * RATE);
-  const pl = truePeaks(L);
-  const pr = truePeaks(R);
+  const pl = await truePeaks(L);
+  const pr = await truePeaks(R);
   const need = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const peak = Math.max(pl[i], pr[i]);
@@ -460,7 +466,7 @@ async function normalize(audio, { lufs, peak = -1 }) {
   let ceiling = peak - 0.3;
   let raised = true;
   for (let round = 0; round < 4; round++) {
-    limit(audio, 10 ** (ceiling / 20));
+    await limit(audio, 10 ** (ceiling / 20));
     after = await measure(interleave(audio));
     raised = false;
     if (after.truePeak > peak) {
@@ -477,7 +483,7 @@ async function normalize(audio, { lufs, peak = -1 }) {
   // The last word is always the limiter's.
   for (let round = 0; round < 3 && (raised || after.truePeak > peak); round++) {
     if (after.truePeak > peak) ceiling -= after.truePeak - peak + 0.2;
-    limit(audio, 10 ** (ceiling / 20));
+    await limit(audio, 10 ** (ceiling / 20));
     after = await measure(interleave(audio));
     raised = false;
   }

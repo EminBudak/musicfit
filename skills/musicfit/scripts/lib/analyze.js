@@ -931,4 +931,4 @@ function finishEnergy(result, feat, chroma, audible, options) {
   return result;
 }
 
-module.exports = { analyze, RATE };
+module.exports = { analyze, RATE, barDistance };

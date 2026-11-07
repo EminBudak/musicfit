@@ -55,7 +55,8 @@ test("a run that fails at its end leaves the earlier files as they were and adds
 // Runs the CLI until it starts writing a WAV, then sends it `signal`. With
 // `twice`, the run has a process group of its own, which gets the signal,
 // and the run gets it again a moment later, as makersmcp's supervisor
-// passes a cancel on.
+// passes a cancel on. Resolves with how it ended and the ffmpeg stand-in's
+// process number.
 function stopWhileWriting(args, signal, { twice = false } = {}) {
   const mark = path.join(dir, `mark-${signal}-${process.hrtime.bigint()}`);
   return new Promise((resolve, reject) => {
@@ -69,7 +70,7 @@ function stopWhileWriting(args, signal, { twice = false } = {}) {
         if (!twice) return void child.kill(signal);
         process.kill(-child.pid, signal);
         setTimeout(() => child.kill(signal), 1);
-      } else if (Date.now() - started > 60000) {
+      } else if (Date.now() - started > 180000) {
         clearInterval(wait);
         child.kill("SIGKILL");
         reject(new Error(`the run never wrote a WAV: ${stderr}`));
@@ -78,9 +79,27 @@ function stopWhileWriting(args, signal, { twice = false } = {}) {
     child.on("error", reject);
     child.on("exit", (code, sig) => {
       clearInterval(wait);
-      resolve({ code, signal: sig, stderr });
+      const ffmpeg = Number((fs.existsSync(mark) && fs.readFileSync(mark, "utf8").trim()) || 0);
+      resolve({ code, signal: sig, stderr, ffmpeg });
     });
   });
+}
+
+// Whether a process of that number still runs, once it has had a moment
+// to go. One that has ended but was not waited for yet (a zombie, as in a
+// container whose first process waits for no one) does not run.
+async function alive(pid) {
+  for (let i = 0; i < 50; i++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+    if (!state || state.startsWith("Z")) return false;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return true;
 }
 
 const quote = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -94,6 +113,9 @@ test("a run stopped with SIGTERM or SIGINT while it writes leaves the earlier fi
     assert.equal(run.signal, signal, `${signal}: ${run.code} ${run.stderr}`);
     assert.match(run.stderr, new RegExp(`\nmusicfit: stopped, so ${quote(out)} is as it was\n$`));
     assert.deepEqual(snapshot(out), before, signal);
+    // The ffmpeg it had started was stopped with it, though only the run got the signal.
+    assert.ok(run.ffmpeg > 0, "the stand-in left no process number");
+    assert.equal(await alive(run.ffmpeg), false, `${signal}: the ffmpeg of the stopped run is still there`);
   }
   // Into a folder that is not there: nothing is made.
   const fresh = outDir("stopped-fresh");
@@ -255,6 +277,24 @@ test("a commit moves the earlier cues.json aside first and the new one in last, 
   assert.deepEqual(snapshot(again), earlier);
 });
 
+test("the hidden folder is made only when the run writes its first file, and one that cannot be made leaves nothing and says why", () => {
+  const folder = path.join(dir, "lazy", "deeper", "fit");
+  const run = out.begin(folder);
+  assert.ok(!fs.existsSync(path.join(dir, "lazy")), "begin() made a folder");
+  const real = fs.mkdirSync;
+  try {
+    fs.mkdirSync = (at, ...rest) => {
+      if (path.basename(at) === ".tmp") throw Object.assign(new Error(`ENOSPC: no space left on device, mkdir '${at}'`), { code: "ENOSPC" });
+      return real(at, ...rest);
+    };
+    assert.throws(() => run.file("fitted.wav"), new RegExp(`^Error: Cannot write to ${quote(folder)}: the disk is full$`));
+  } finally {
+    fs.mkdirSync = real;
+  }
+  run.abort();
+  assert.ok(!fs.existsSync(path.join(dir, "lazy")), "a folder made for the hidden one is still there");
+});
+
 test("--analyze and a fit keep their own default folders, so reading a track never replaces its fit", () => {
   const { file } = fixture("house");
   const cwd = path.join(dir, "defaults");
@@ -266,6 +306,66 @@ test("--analyze and a fit keep their own default folders, so reading a track nev
   assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-house", "cues.json"), "utf8")).mode, "bars");
   assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-analysis-house", "cues.json"), "utf8")).mode, "analysis");
   assert.deepEqual(fs.readdirSync(path.join(cwd, "musicfit-analysis-house")).sort(), ["FIT.md", "cues.json", "seams.png"]);
+});
+
+test("a run killed outright while it analyses the track leaves nothing behind: the hidden folder comes only with the first file", posix, async () => {
+  const out = goodFit("killed-analysing");
+  const before = snapshot(out);
+  const fresh = path.join(dir, "killed-fresh", "fit");
+  for (const folder of [out, fresh]) {
+    const mark = path.join(dir, `decoded-${process.hrtime.bigint()}`);
+    const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", "--out", folder], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "decoded", "ffmpeg"), MUSICFIT_TEST_MARK: mark } });
+    const ended = new Promise((resolve) => child.on("exit", resolve));
+    for (let i = 0; i < 12000 && !fs.existsSync(mark); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(fs.existsSync(mark), "the track was never decoded");
+    child.kill("SIGKILL");
+    await ended;
+  }
+  assert.deepEqual(snapshot(out), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(out)).filter((e) => e.startsWith(".musicfit-")), []);
+  assert.ok(!fs.existsSync(path.join(dir, "killed-fresh")), "a folder was made");
+});
+
+test("while a track is analysed the run is free to hear a stop: the analysis has a thread of its own", async () => {
+  const { analyzeInThread } = require("../skills/musicfit/scripts/lib/thread");
+  const { analyze } = require("../skills/musicfit/scripts/lib/analyze");
+  const { decode } = require("../skills/musicfit/scripts/lib/audio");
+  const samples = await decode(fixture("house").file, { rate: 24000, channels: 1 });
+  const alone = analyze(samples.slice(), {});
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 5);
+  const started = Date.now();
+  const a = await analyzeInThread(samples, {});
+  const took = Date.now() - started;
+  clearInterval(timer);
+  assert.ok(ticks >= Math.min(5, took / 20), `${ticks} ticks in ${took} ms`);
+  // The same analysis, the bars' distance included.
+  assert.equal(a.tempo.bpm, alone.tempo.bpm);
+  assert.deepEqual(a.bars, alone.bars);
+  assert.equal(a.distance(1, 5), alone.distance(1, 5));
+});
+
+test("a stop whose ffmpeg ended a moment before it, as with Ctrl-C to the whole group, is still said and ends by that signal", posix, async () => {
+  const out = goodFit("dies-first");
+  const before = snapshot(out);
+  const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", "--out", out, "--json"], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "diesfirst", "ffmpeg") } });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += d));
+  child.stderr.on("data", (d) => (stderr += d));
+  const [code, signal] = await new Promise((resolve) => child.on("exit", (...end) => resolve(end)));
+  assert.equal(signal, "SIGINT", `${code} ${stderr}`);
+  assert.match(stderr, new RegExp(`musicfit: stopped, so ${quote(out)} is as it was\n$`));
+  assert.deepEqual(JSON.parse(stdout), { ok: false, error: `stopped, so ${out} is as it was` });
+  assert.deepEqual(snapshot(out), before);
+});
+
+test("a process that exits with a run not ended takes its hidden folder with it", () => {
+  const folder = path.join(dir, "exits", "fit");
+  const script = `const out = require(${JSON.stringify(path.resolve(__dirname, "../skills/musicfit/scripts/lib/out"))}); const run = out.begin(${JSON.stringify(folder)}); require("node:fs").writeFileSync(run.file("fitted.wav"), "half"); process.exit(3);`;
+  const run = spawnSync(process.execPath, ["-e", script], { encoding: "utf8" });
+  assert.equal(run.status, 3, run.stderr);
+  assert.ok(!fs.existsSync(path.join(dir, "exits")), `left: ${fs.existsSync(path.join(dir, "exits")) ? JSON.stringify(snapshot(path.join(dir, "exits"))) : ""}`);
 });
 
 test("a track named in any script gets a folder of its own, and one with no letters a short hash", () => {

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, and once the track has been decoded for the
+# analysis (mono at 24 kHz) leaves a file at $MUSICFIT_TEST_MARK, so a test
+# can stop the run while it analyses the track.
+ffmpeg "$@"
+status=$?
+case " $* " in
+  *" -ar 24000 "*) : > "$MUSICFIT_TEST_MARK" ;;
+esac
+exit $status

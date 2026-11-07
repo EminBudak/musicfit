@@ -1,10 +1,10 @@
 #!/bin/sh
 # Runs the ffmpeg on PATH, but before the call that writes a 24-bit WAV it
-# leaves a file at $MUSICFIT_TEST_MARK and waits, so a test can stop the
-# run while it writes.
+# writes its process number to $MUSICFIT_TEST_MARK and waits, so a test can
+# stop the run while it writes, and see whether this process outlives it.
 for arg do
   if [ "$arg" = pcm_s24le ]; then
-    : > "$MUSICFIT_TEST_MARK"
+    echo $$ > "$MUSICFIT_TEST_MARK"
     sleep 10
   fi
 done

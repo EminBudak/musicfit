@@ -10,7 +10,8 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { RATE, decode, encodeWav, measure, measureFile } = require("./audio");
 const { probe, fits, ownSound, encodeAac, mux, mark, fpsText } = require("./video");
-const { analyze, RATE: ANALYSIS_RATE } = require("./analyze");
+const { RATE: ANALYSIS_RATE } = require("./analyze");
+const { analyzeInThread } = require("./thread");
 const { plan } = require("./plan");
 const { assemble, speech, floorOf, duck, normalize, interleave, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
@@ -73,7 +74,7 @@ async function fit(track, options) {
     const o = { ...options, warnings: [...(options.warnings || [])] };
     // The video is read before any work, so one that cannot take this fit
     // is refused first.
-    const video = o.video && !o.analyze ? await readVideo(track, o, run) : null;
+    const video = o.video && !o.analyze ? await readVideo(track, o) : null;
     if (o.fps === undefined) o.fps = 30;
     const result = await make(track, o, run, video);
     run.commit();
@@ -89,8 +90,8 @@ async function fit(track, options) {
 // video's own sound. That sound is read now when it is laid in, so a video
 // whose own sound plays nearly all the way through is refused until
 // --video-sound says what to do with it.
-async function readVideo(track, o, run) {
-  const picture = await probe(o.video, { scratch: run.scratch("probe.mp4") });
+async function readVideo(track, o) {
+  const picture = await probe(o.video);
   if (picture.made) throw new Error(`${picture.name} is a video musicfit made, ${picture.made.track} laid under ${picture.made.source}: give --video ${picture.made.source}, the video it was made from`);
   const adopted = o.fps === undefined;
   if (adopted) o.fps = Number(picture.fps.toFixed(3));
@@ -155,7 +156,7 @@ async function make(track, options, run, video) {
   log(`Reading ${trackName}`);
   // The interleaved copy is let go as soon as it is split.
   const [source, mono] = await Promise.all([decode(track, { rate: RATE, channels: 2 }).then(split), decode(track, { rate: ANALYSIS_RATE, channels: 1 })]);
-  const a = analyze(mono, { bpm: options.bpm, meter: options.meter, drop: options.drop });
+  const a = await analyzeInThread(mono, { bpm: options.bpm, meter: options.meter, drop: options.drop });
   // A drop found on a bar line moves onto the start of its hit.
   if (a.drop && !a.drop.given && a.mode !== "energy") {
     const at = attackNear(source, a.drop.time);
