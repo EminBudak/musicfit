@@ -108,10 +108,12 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
     seams,
     voice: voice ? { file: voice.file, duck: voice.duck, spans: voice.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })) } : null,
     // With --video: video.mp4, the video's picture with this sound under
-    // it. sound is what became of the video's own sound: keep (it plays
-    // with the music), voice (the music dips under it), drop (left out) or
-    // none (it had none); same says when it was the track or the voice,
-    // which play in its place, and spans where it plays.
+    // it. sound is what became of the video's own sound: keep (at its own
+    // level, the music dipping half of --duck under it), voice (set to the
+    // target, the music dipping --duck under it), drop (left out) or none
+    // (it had none); same says when the video was the track or the voice,
+    // which play in its place; spans are where it plays and duck how far
+    // the music dips there.
     video: video
       ? {
           file: "video.mp4",
@@ -123,7 +125,7 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
           picture: video.picture,
           sound: video.sound,
           same: video.same,
-          duck: video.sound === "voice" ? video.duck : null,
+          duck: video.sound === "voice" || video.sound === "keep" ? video.duck : null,
           spans: video.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })),
           loudness: { target: options.lufs, integrated: round1(video.loudness.integrated), truePeak: round1(video.loudness.truePeak) },
         }
@@ -216,7 +218,9 @@ const sec = (t) => `${t.toFixed(2)} s`;
 function fitMarkdown(c, { trackName }) {
   const lines = [];
   lines.push(`# ${trackName} fitted to ${sec(c.length)}`, "");
-  const level = c.loudness && c.loudness.integrated !== null ? `, at ${c.loudness.integrated} LUFS${c.voice ? " as a whole" : ""} with true peaks at ${c.loudness.truePeak} dBTP` : c.loudness ? ", silent" : "";
+  // The music dips under a voice, or under the video's own sound.
+  const dips = Boolean(c.video && c.video.duck !== null && c.video.spans.length);
+  const level = c.loudness && c.loudness.integrated !== null ? `, at ${c.loudness.integrated} LUFS${c.voice || dips ? " as a whole, dips included," : ""} with true peaks at ${c.loudness.truePeak} dBTP` : c.loudness ? ", silent" : "";
   lines.push(`\`fitted.wav\` is ${sec(c.length)} long (${c.frames} frames at ${c.fps} fps), 48 kHz stereo${level}.${c.mix ? " `mix.wav` is the same music with the voice over it, the whole at the target loudness." : ""}`, "");
   if (c.video) {
     const v = c.video;
@@ -255,22 +259,28 @@ function fitMarkdown(c, { trackName }) {
     const bars = s.sourceBars ? (s.sourceBars[0] === s.sourceBars[1] ? `bar ${s.sourceBars[0]}` : `bars ${s.sourceBars[0]} to ${s.sourceBars[1]}`) : "a stretch";
     lines.push(`${i + 1}. ${sec(s.from)} to ${sec(s.to)} plays ${bars} of the track (${sec(s.source[0])} to ${sec(s.source[1])} there).`);
   });
-  const dips = c.video && c.video.sound === "voice";
+  const stretches = (n) => `${n} ${n === 1 ? "stretch" : "stretches"}`;
   if (c.voice || dips) {
-    const under = c.voice && dips ? `the voice speaks or ${c.video.source}'s own sound plays` : c.voice ? "the voice speaks" : `${c.video.source}'s own sound plays`;
-    const count = (c.voice ? c.voice.spans.length : 0) + (dips ? c.video.spans.length : 0);
-    lines.push(`${c.segments.length + 1}. The music dips ${c.voice ? c.voice.duck : c.video.duck} dB wherever ${under} (${count} ${count === 1 ? "stretch" : "stretches"}), starting 0.15 s before it and coming back over 0.5 s after.`);
+    const own = `${c.video ? c.video.source : ""}'s own sound plays`;
+    let what;
+    if (!dips) what = `${c.voice.duck} dB wherever the voice speaks (${stretches(c.voice.spans.length)})`;
+    else if (!c.voice) what = `${c.video.duck} dB wherever ${own} (${stretches(c.video.spans.length)})`;
+    else if (c.voice.duck === c.video.duck) what = `${c.voice.duck} dB wherever the voice speaks or ${own} (${stretches(c.voice.spans.length + c.video.spans.length)})`;
+    else what = `${c.voice.duck} dB wherever the voice speaks (${stretches(c.voice.spans.length)}) and ${c.video.duck} dB wherever ${own} (${stretches(c.video.spans.length)})`;
+    lines.push(`${c.segments.length + 1}. The music dips ${what}, starting 0.15 s before each and coming back over 0.5 s after.`);
   }
   if (c.loudness && c.loudness.integrated !== null) {
     const step = c.segments.length + (c.voice || dips ? 2 : 1);
-    const short = !c.voice && c.loudness.integrated < c.loudness.target - 0.5;
+    // A music that dips reads quieter as a whole than where it does not.
+    const short = !c.voice && !dips && c.loudness.integrated < c.loudness.target - 0.5;
     const how = c.loudness.limited ? `, with a limiter holding the true peaks at ${c.loudness.truePeak} dBTP` : " with one gain change";
+    const where = c.voice && dips ? ` where nobody speaks and ${c.video.source}'s own sound does not play` : c.voice ? " where nobody speaks" : dips ? ` where ${c.video.source}'s own sound does not play` : "";
     if (short) lines.push(`${step}. Loudness raised toward ${c.loudness.target} LUFS but stopped at ${c.loudness.integrated} LUFS${how}: any louder and the peaks would pass -1 dBTP.`);
-    else lines.push(`${step}. Loudness set to ${c.loudness.target} LUFS${c.voice ? " where nobody speaks" : ""}${how}.`);
+    else lines.push(`${step}. Loudness set to ${c.loudness.target} LUFS${where}${how}.`);
   }
   if (c.video) {
     const step = c.segments.length + (c.voice || dips ? 1 : 0) + (c.loudness && c.loudness.integrated !== null ? 1 : 0) + 1;
-    lines.push(`${step}. ${c.video.source}'s picture copied packet for packet into \`video.mp4\`, with ${underVideo(c)} under it, the whole set to ${c.video.loudness.target} LUFS, measured after the AAC encoding.`);
+    lines.push(`${step}. ${c.video.source}'s picture copied packet for packet into \`video.mp4\`, with ${underVideo(c)}, the whole set to ${c.video.loudness.target} LUFS, measured after the AAC encoding.`);
   }
   lines.push("");
 
@@ -286,14 +296,21 @@ function fitMarkdown(c, { trackName }) {
   return lines.join("\n") + "\n";
 }
 
-// What plays under the picture in video.mp4, said of the video.
+// What plays under the picture in video.mp4, said of the video, as in
+// "video.mp4 is film.mp4 with ...".
 function underVideo(c) {
   const v = c.video;
   const voice = c.voice ? " and the voice" : "";
+  const places = (n) => `${n} ${n === 1 ? "place" : "places"}`;
   if (v.same === "voice") return "the music and the voice, which is its own sound, laid in once";
   if (v.same === "track") return "the music fitted from its own sound, in place of that sound";
-  if (v.sound === "keep") return `the music${voice} and its own sound at its own level`;
-  if (v.sound === "voice") return `its own sound${voice} and the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
+  // The music, the voice when there is one, and the video's own sound.
+  const all = c.voice ? "the music, the voice and its own sound" : "the music and its own sound";
+  if (v.sound === "keep" && !v.spans.length) return `${all} at its own level`;
+  if (v.sound === "keep" && c.voice) return `${all} at its own level, the music dipping ${c.voice.duck} dB under the voice and ${v.duck} dB under its own sound`;
+  if (v.sound === "keep") return `${all} at its own level, the music dipping ${v.duck} dB under it in ${places(v.spans.length)}`;
+  if (v.sound === "voice" && !v.spans.length) return `${all}, which had no speech for the music to dip under`;
+  if (v.sound === "voice") return `its own sound${voice}, the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
   if (v.sound === "drop") return `the music${voice} in place of its own sound`;
   return `the music${voice} (it had no sound of its own)`;
 }

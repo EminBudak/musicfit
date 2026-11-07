@@ -128,33 +128,36 @@ function plain() {
   return plainFit;
 }
 
-test("--video writes video.mp4: the picture packet for packet, the fitted track lined up with it, its own sound kept at its level, at --lufs with the true peak at or under -1 dBTP", async () => {
+test("--video writes video.mp4: the picture packet for packet, the fitted track lined up with it, its own sound kept at its level with the music dipping half of --duck under it, at --lufs with the true peak at or under -1 dBTP", async () => {
   const video = film("film25", { sound: effects() });
   const out = at("film25-fit");
-  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", video, "--out", out]);
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", video, "--video-sound", "keep", "--out", out]);
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(fs.readdirSync(out).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png", "video.mp4"]);
-  assert.match(run.stdout, /\n {2}Video {3}video\.mp4 is film25\.mp4 with the music and its own sound at its own level; -1[34]\.\d LUFS, true peak -[\d.]+ dBTP\n/);
+  assert.match(run.stdout, /\n {2}Video {3}video\.mp4 is film25\.mp4 with the music and its own sound at its own level, the music dipping 5 dB under it in 2 places; -1[34]\.\d LUFS, true peak -[\d.]+ dBTP\n/);
 
   const c = cuesOf(out);
   // Without --fps the frames count at the video's rate.
   assert.equal(c.fps, 25);
   assert.equal(c.frames, 300);
   assert.equal(c.drop.frame, 200);
-  assert.deepEqual({ ...c.video, spans: c.video.spans.length, loudness: null }, { file: "video.mp4", source: "film25.mp4", length: 12, fps: 25, frames: 300, steady: true, picture: "mpeg4", sound: "keep", same: null, duck: null, spans: 2, loudness: null });
+  assert.deepEqual({ ...c.video, spans: c.video.spans.length, loudness: null }, { file: "video.mp4", source: "film25.mp4", length: 12, fps: 25, frames: 300, steady: true, picture: "mpeg4", sound: "keep", same: null, duck: 5, spans: 2, loudness: null });
 
   assert.deepEqual(packets(path.join(out, "video.mp4")), packets(video));
-  const level = await measureFile(path.join(out, "video.mp4"));
-  assert.ok(Math.abs(level.integrated + 14) <= 0.5, `${level.integrated} LUFS`);
-  assert.ok(level.truePeak <= -1, `true peak ${level.truePeak} dBTP`);
+  const loudness = await measureFile(path.join(out, "video.mp4"));
+  assert.ok(Math.abs(loudness.integrated + 14) <= 0.5, `${loudness.integrated} LUFS`);
+  assert.ok(loudness.truePeak <= -1, `true peak ${loudness.truePeak} dBTP`);
   // The mark names no file: the track's and the video's names stay the user's.
   assert.match(said(path.join(out, "video.mp4")), /comment\s*: musicfit \S+: a fitted track laid under this picture\n/);
 
-  // With keep the music does not dip at all: fitted.wav is a plain fit's,
+  // With keep the music dips 5 dB where an effect plays and nowhere else,
   // and in video.mp4 the bar after the hit, where an effect plays on the
   // hit, has the music at its level, lined up with fitted.wav.
-  assert.ok(fs.readFileSync(path.join(out, "fitted.wav")).equals(plain().wav), "fitted.wav is not a plain fit's");
   const music = mono(await decode(path.join(out, "fitted.wav")));
+  const level = mono(await decode(path.join(plain().out, "fitted.wav")));
+  const dip = db(music, 2.05, 2.25) - db(level, 2.05, 2.25);
+  assert.ok(Math.abs(dip + 5) < 1, `the music dips ${dip.toFixed(1)} dB under the first effect`);
+  assert.ok(Math.abs(db(music, 4, 6) - db(level, 4, 6)) < 0.3, "the music dips where no effect plays");
   const under = mono(await decode(path.join(out, "video.mp4")));
   assert.ok(Math.abs(lag(music, under, 4, 6)) <= 96, `video.mp4's sound is ${lag(music, under, 4, 6)} samples off`);
   const bar = 60 / 124 * 4;
@@ -197,15 +200,21 @@ test("--video-sound voice dips the music about --duck dB under the video's own s
   assert.ok(xy / Math.sqrt(xx * yy) > 0.95, `video.mp4's sound is not the music alone (${(xy / Math.sqrt(xx * yy)).toFixed(3)})`);
 });
 
-test("a video whose own sound plays nearly all the way through is refused until --video-sound says what becomes of it", () => {
-  const tone = film("bed25", { sound: bed() });
-  const out = at("bed-ask");
-  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", tone, "--out", out]);
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /musicfit: bed25\.mp4 has sound of its own for 1[12]\.\d of its 12\.0 s, so say what becomes of it with --video-sound: keep plays it with the track, voice dips the track under it \(for speech\), drop leaves it out \(for music of its own\)\n$/);
-  assert.doesNotMatch(run.stderr, /Reading house\.wav/);
-  assert.ok(!fs.existsSync(out));
-  const kept = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", tone, "--video-sound", "keep", "--out", out]);
+test("a video with sound of its own is refused until --video-sound says what becomes of it, however little of it plays", () => {
+  const cases = [
+    ["bed25", film("bed25", { sound: bed() }), /1[12]\.\d/],
+    ["film25", film("film25", { sound: effects() }), /\d\.\d/],
+    ["talk", film("talk", { sound: speech() }), /\d+\.\d/],
+  ];
+  for (const [name, video, plays] of cases) {
+    const out = at(`${name}-ask`);
+    const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", video, "--out", out]);
+    assert.equal(run.status, 1, `${name}: ${run.stderr}`);
+    assert.match(run.stderr, new RegExp(`musicfit: ${name}\\.mp4 has sound of its own for ${plays.source} of its 12\\.0 s, so say what becomes of it with --video-sound: keep for sound effects \\(they stay at their level, the music dips 5 dB under them\\), voice for speech \\(set to -14 LUFS, the music dips 10 dB under it\\), or drop for music of its own \\(left out\\)\\n$`));
+    assert.doesNotMatch(run.stderr, /Reading house\.wav/);
+    assert.ok(!fs.existsSync(out), `${name} made ${out}`);
+  }
+  const kept = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", film("bed25", { sound: bed() }), "--video-sound", "keep", "--out", at("bed-keep")]);
   assert.equal(kept.status, 0, kept.stderr);
   assert.match(kept.stdout, /Note {4}bed25\.mp4's own sound plays for 1[12]\.\d of its 12\.0 s, along with the music\. If that sound is music of its own, --video-sound drop leaves it out\./);
 });
@@ -347,12 +356,12 @@ test("the same sound is laid in once: a video that is the track, or the voice", 
 test("frames count at the video's rate without --fps, another --fps is noted, and a rate that does not hold steady takes seconds only", () => {
   const video = film("film25", { sound: effects() });
   const out = at("frames25");
-  const run = cli([fixture("house").file, "--length", "300f", "--hit", "200f", "--video", video, "--out", out, "--json"]);
+  const run = cli([fixture("house").file, "--length", "300f", "--hit", "200f", "--video", video, "--video-sound", "keep", "--out", out, "--json"]);
   assert.equal(run.status, 0, run.stderr);
   const c = JSON.parse(run.stdout);
   assert.deepEqual([c.fps, c.length, c.drop.time, c.video.file], [25, 12, 8, "video.mp4"]);
 
-  const other = cli([fixture("house").file, "--length", "12", "--hit", "8", "--fps", "30", "--video", video, "--out", at("fps30")]);
+  const other = cli([fixture("house").file, "--length", "12", "--hit", "8", "--fps", "30", "--video", video, "--video-sound", "keep", "--out", at("fps30")]);
   assert.equal(other.status, 0, other.stderr);
   assert.match(other.stdout, /Note {4}film25\.mp4 runs at 25 fps and --fps is 30, so the frames in cues\.json are not the video's: leave --fps out, or give --fps 25, to count them as the video does\./);
 
@@ -387,4 +396,51 @@ test("an HEVC picture is tagged hvc1 in video.mp4, so Apple's players take it", 
   assert.equal(run.status, 0, run.stderr);
   assert.match(said(path.join(out, "video.mp4")), /Video: hevc \(Main\) \(hvc1 \//);
   assert.deepEqual(packets(path.join(out, "video.mp4")), packets(hevc));
+});
+
+test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
+  const { fitMarkdown, underVideo } = require("../skills/musicfit/scripts/lib/report");
+  const base = {
+    length: 12, frames: 300, fps: 25, mix: null, tempo: null, drop: null, seams: [], segments: [{ from: 0, to: 12, source: [0, 12], sourceBars: null }],
+    start: { kind: "top", firstBar: null, fadeIn: 0 }, end: { kind: "fade", time: 12, frame: 300, finalHit: null, fade: { from: 11, to: 12, fromFrame: 275, toFrame: 300, onBeat: false } },
+    mode: "energy", warnings: [], loudness: { target: -14, integrated: -24, truePeak: -6.9, range: 3, limited: true },
+  };
+  const video = (fields) => ({ file: "video.mp4", source: "talk.mp4", length: 12, fps: 25, frames: 300, steady: true, picture: "h264", same: null, spans: [{ from: 2, to: 5 }], loudness: { target: -14, integrated: -14, truePeak: -1.2 }, ...fields });
+  const voice = { file: "vo.wav", duck: 10, spans: [{ from: 6, to: 8 }] };
+  const cases = [
+    { video: video({ sound: "keep", duck: 5 }) },
+    { video: video({ sound: "keep", duck: 5, spans: [] }) },
+    { video: video({ sound: "keep", duck: 5 }), voice },
+    { video: video({ sound: "voice", duck: 10 }) },
+    { video: video({ sound: "voice", duck: 10, spans: [] }) },
+    { video: video({ sound: "voice", duck: 10 }), voice },
+    { video: video({ sound: "drop", duck: null, spans: [] }) },
+    { video: video({ sound: "drop", duck: null, spans: [] }), voice },
+    { video: video({ sound: "none", duck: null, spans: [] }) },
+    { video: video({ sound: "drop", same: "track", duck: null, spans: [] }) },
+    { video: video({ sound: "drop", same: "voice", duck: null, spans: [] }), voice },
+  ];
+  for (const fields of cases) {
+    const c = { ...base, voice: null, ...fields };
+    const md = fitMarkdown(c, { trackName: "house.wav" });
+    const words = underVideo(c);
+    const label = `${c.video.sound}${c.video.same ? `/${c.video.same}` : ""}${c.voice ? " with a voice" : ""}${c.video.spans.length ? "" : " and no spans"}`;
+    assert.ok(md.includes(`\`video.mp4\` is talk.mp4 with ${words}: its picture as it was`), label);
+    assert.ok(md.includes(`into \`video.mp4\`, with ${words}, the whole set to -14 LUFS`), label);
+    assert.doesNotMatch(md, /\b(\w+ \w+) \1\b/, label);
+    const dips = Boolean(c.voice) || (c.video.duck !== null && c.video.spans.length > 0);
+    // -24 LUFS is the music as a whole with its dips, not a loudness the limiter stopped at.
+    if (dips) assert.doesNotMatch(md, /stopped at/, label);
+    if (dips) assert.match(md, /at -24 LUFS as a whole, dips included, with true peaks/, label);
+  }
+  assert.match(fitMarkdown({ ...base, voice: null, video: null }, { trackName: "house.wav" }), /Loudness raised toward -14 LUFS but stopped at -24 LUFS/);
+});
+
+test("with --video-sound voice and no voice, FIT.md says the loudness was set where the video's own sound does not play", () => {
+  const out = at("talk-voice");
+  if (!fs.existsSync(path.join(out, "FIT.md"))) assert.equal(cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", film("talk", { sound: speech() }), "--video-sound", "voice", "--out", out]).status, 0);
+  const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
+  assert.doesNotMatch(md, /stopped at/);
+  assert.match(md, /Loudness set to -14 LUFS where talk\.mp4's own sound does not play/);
+  assert.match(md, /with its own sound, the music dipping 10 dB under it, the whole set to -14 LUFS/);
 });

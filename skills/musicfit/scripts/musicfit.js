@@ -30,11 +30,12 @@ Options:
                     the video's picture as it was with this sound under it.
                     The video has to be --length long, to a frame
   --video-sound <how>
-                    what becomes of the video's own sound: keep (it plays with
-                    the music at its own level), voice (the music dips under
-                    it, for speech) or drop (left out, for music of its own).
-                    Without it, a video whose own sound plays nearly all the
-                    way through is refused until you choose (default: keep)
+                    what becomes of the video's own sound: keep (sound
+                    effects: they stay at their level and the music dips
+                    half of --duck under them), voice (speech: set to --lufs,
+                    the music dips --duck under it) or drop (music of its
+                    own: left out). Without it, a video with more than a
+                    faint room tone of its own is refused until you choose
   --lufs <n>        loudness target in LUFS (default: -14)
   --end <kind>      auto, natural (the track's own ending) or fade (default: auto)
   --fade <s>        length of the closing fade, in whole beats (default: a bar)

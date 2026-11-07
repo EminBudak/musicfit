@@ -76,8 +76,8 @@ async function fit(track, options) {
 // What --video brings, read before any work: the picture, refused when it
 // cannot take this fit, the rate frames count at, and what becomes of the
 // video's own sound. That sound is read now when it is laid in, so a video
-// whose own sound plays nearly all the way through is refused until
-// --video-sound says what to do with it.
+// with sound of its own is refused until --video-sound says what to do
+// with it: musicfit cannot tell speech from sound effects or from music.
 async function readVideo(track, o) {
   const picture = await probe(o.video);
   const adopted = o.fps === undefined;
@@ -109,17 +109,21 @@ async function readVideo(track, o) {
   // A sound that never goes quiet, like a music bed, plays all the way
   // through even where speech() hears no more than a steady floor.
   const plays = floorOf(own) > -40 ? o.length : seconds(spans);
-  if (sound === undefined && plays > 0.6 * o.length) {
-    throw new Error(`${picture.name} has sound of its own for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep plays it with the track, voice dips the track under it (for speech), drop leaves it out (for music of its own)`);
+  if (sound === undefined && plays > 0) {
+    throw new Error(`${picture.name} has sound of its own for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay at their level, the music dips ${num(o.duck / 2)} dB under them), voice for speech (set to ${o.lufs} LUFS, the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
   }
+  // Silence, or a faint room tone the music covers, stays as it is.
   sound = sound || "keep";
   if (own.over > 0.05) o.warnings.push(`${picture.name}'s own sound runs ${own.over.toFixed(2)} s past the end and was cut there.`);
   const dipped = seconds(spans);
-  if (sound === "keep" && plays > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, along with the music. If that sound is music of its own, --video-sound drop leaves it out.`);
-  if (sound === "voice" && dipped > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${dipped.toFixed(1)} of its ${o.length.toFixed(1)} s, so the music stays dipped nearly all the way. If that sound is music of its own, --video-sound drop leaves it out.`);
+  if (sound === "keep" && plays > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, ${dipped > 0.6 * o.length ? `so the music stays ${num(o.duck / 2)} dB down most of the way` : "along with the music"}. If that sound is music of its own, --video-sound drop leaves it out.`);
+  if (sound === "voice" && dipped > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${dipped.toFixed(1)} of its ${o.length.toFixed(1)} s, so the music stays dipped most of the way. If that sound is music of its own, --video-sound drop leaves it out.`);
   if (sound === "voice" && !spans.length) o.warnings.push(`No speech was found in ${picture.name}'s own sound, so the music was not dipped.`);
   return { ...video, sound, own, spans };
 }
+
+// A number of decibels as written: 5, 7.5.
+const num = (x) => String(Math.round(x * 10) / 10);
 
 // AAC can lift a true peak over the -1 dBTP the sound was held to. So the
 // sound is encoded on its own and measured as a player decodes it, and
@@ -184,9 +188,12 @@ async function make(track, options, run, video) {
     spoken.R.set(v.R.subarray(0, n));
     spans = speech(spoken);
   }
-  // The music dips under the voice, and under the video's own sound with
-  // --video-sound voice, once: where both sound it dips as far as under one.
-  const dips = video && video.sound === "voice" ? [...spans, ...video.spans] : spans;
+  // The music dips --duck dB under the voice and under the video's own
+  // sound with --video-sound voice, and half as far under that sound with
+  // keep, so sound effects stay clear over it. Where two of them sound at
+  // once it dips as far as under the deeper one.
+  const depth = video && video.sound === "voice" ? options.duck : video && video.sound === "keep" ? options.duck / 2 : null;
+  const dips = [...spans, ...(depth === null ? [] : video.spans.map(([from, to]) => [from, to, depth]))];
   if (options.voice || dips.length) duck(music, dips, options.duck);
 
   let voice = null;
@@ -236,7 +243,7 @@ async function make(track, options, run, video) {
     const m4a = run.scratch("sound.m4a");
     const level = await aac(under, m4a, options.lufs);
     await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version) });
-    laid = { ...picture, sound: video.sound, same: video.same, duck: options.duck, spans: video.spans, loudness: level };
+    laid = { ...picture, sound: video.sound, same: video.same, duck: depth, spans: video.spans, loudness: level };
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
   }
 

@@ -333,13 +333,15 @@ function speech(voice) {
 }
 
 // Lowers the music by `depth` dB wherever the voice speaks, starting 0.15 s
-// before it and coming back over 0.5 s after it stops.
+// before it and coming back over 0.5 s after it stops. A span can carry a
+// depth of its own as its third value; where spans meet, the music dips as
+// far as the deepest of them, never further.
 function duck(music, spans, depth) {
-  const floor = 10 ** (-depth / 20);
   const gain = new Float32Array(music.L.length).fill(1);
   const attack = Math.round(0.15 * RATE);
   const release = Math.round(0.5 * RATE);
-  for (const [from, to] of spans) {
+  for (const [from, to, own] of spans) {
+    const floor = 10 ** (-(own === undefined ? depth : own) / 20);
     const a = Math.round(from * RATE);
     const b = Math.round(to * RATE);
     for (let i = Math.max(0, a - attack); i < Math.min(gain.length, b + release); i++) {
