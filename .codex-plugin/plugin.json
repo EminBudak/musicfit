@@ -1,7 +1,7 @@
 {
   "name": "musicfit",
   "version": "0.1.2",
-  "description": "Fit a music track to a video cut: exactly the length you need, cut and looped on bar lines, the drop on the second you pick and a fade that ends on a beat.",
+  "description": "Fit a music track to a video cut: exactly the length you need, cut and looped on bar lines, the drop on the second you pick and a fade that ends on a beat, and laid under the video when you give it.",
   "author": {
     "name": "Emin Budak",
     "url": "https://eminbudak.com"
@@ -13,7 +13,7 @@
   "interface": {
     "displayName": "musicfit",
     "shortDescription": "Fit music to a video cut",
-    "longDescription": "Makes a music track exactly as long as your video by cutting or looping whole bars, lands its drop on the second you pick, ends it with a fade that resolves on a beat, ducks it under a voice and sets its loudness. Writes fitted.wav and cues.json with every beat and bar as frame numbers. Needs Node 22 or newer and ffmpeg, and no API key.",
+    "longDescription": "Makes a music track exactly as long as your video by cutting or looping whole bars, lands its drop on the second you pick, ends it with a fade that resolves on a beat, ducks it under a voice and sets its loudness. Writes fitted.wav and cues.json with every beat and bar as frame numbers, and with the video given the video with the track under it. Needs Node 22 or newer and ffmpeg 4.4 or newer, and no API key.",
     "developerName": "Emin Budak",
     "category": "Creativity",
     "capabilities": ["Read", "Write"],

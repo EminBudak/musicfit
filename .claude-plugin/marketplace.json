@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "musicfit",
-      "description": "Makes a music track exactly as long as a video by cutting or looping whole bars, lands its drop on a chosen second, ends it on a beat, ducks it under a voice and sets its loudness, with cues.json (every beat and bar in seconds and frames) for the edit.",
+      "description": "Makes a music track exactly as long as a video by cutting or looping whole bars, lands its drop on a chosen second, ends it on a beat, ducks it under a voice, sets its loudness and can lay it under the video, with cues.json (every beat and bar in seconds and frames) for the edit.",
       "version": "0.1.2",
       "source": "./",
       "skills": ["./skills/musicfit"],
