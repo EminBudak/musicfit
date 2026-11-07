@@ -1,0 +1,4 @@
+[aost#0:0 @ 0x63d2be948e80] Unknown encoder 'nosuchencoder'
+[aost#0:0 @ 0x63d2be948e80] Error selecting an encoder
+Error opening output file fitted.wav.
+Error opening output files: Encoder not found

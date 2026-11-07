@@ -32,7 +32,7 @@ Options:
 
 Times are seconds unless they end in f (frames at --fps). The track can be
 any file ffmpeg reads, a video's sound included. Needs Node 22 or newer and
-ffmpeg; set FFMPEG_PATH to pick the ffmpeg.`;
+ffmpeg 4.4 or newer; set FFMPEG_PATH to pick the ffmpeg.`;
 
 const VALUED = new Set(["--length", "--hit", "--drop", "--fps", "--voice", "--duck", "--lufs", "--end", "--fade", "--bpm", "--meter", "--out"]);
 

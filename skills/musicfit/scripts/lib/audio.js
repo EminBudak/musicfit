@@ -2,7 +2,8 @@
 
 // ffmpeg does the decoding, the encoding and the loudness measurement.
 // Samples travel through pipes as raw 32-bit floats, so nothing is written
-// to disk but the final files.
+// to disk but the final files. Every call here works with ffmpeg 4.4 (the
+// one Ubuntu 22.04 has) and newer.
 
 const { spawn } = require("node:child_process");
 
@@ -10,6 +11,58 @@ const RATE = 48000;
 
 function ffmpegPath() {
   return process.env.FFMPEG_PATH || "ffmpeg";
+}
+
+// What ffmpeg prints once it has given up, after the line that says why:
+// how it stopped, which says nothing of the cause. ffmpeg 4.4 ends with the
+// first five, ffmpeg 7 and newer with the others.
+const CLOSING = [
+  /^Conversion failed!?$/,
+  /^Error while processing the decoded data/,
+  /^Failed to inject frame into filter network/,
+  /^Error reinitializing filters!?$/,
+  /^Exiting normally/,
+  /^Error opening (input|output) files?\b/,
+  /^Error selecting an encoder$/,
+  /^Error closing file\b/,
+  /^Error muxing a packet$/,
+  /^Task finished with error code/,
+  /^Terminating thread with return code/,
+];
+// The words of a line that says what went wrong.
+const WRONG = /error|\b(invalid|unable|cannot|can't|could not|couldn't|failed|not found|no such|unknown|unrecognized|not supported|denied|no space|refused|not opened|is not|does not)\b/i;
+// What ffmpeg says of its input and output on the way, for a run that names no error.
+const INFO = /^(Input|Output) #\d|^Stream (mapping|#)|^Guessed Channel Layout|^Estimating duration|^Duration:|^Metadata:|^Press \[q\]|^(size|frame)=|^Summary:$/;
+
+// Why ffmpeg failed, from what it printed: the last line that names an
+// error once the closing lines and the indented ones (a summary, the
+// streams) are left out, without the "[name @ 0x...]" that starts it; else
+// the last line it printed that says something.
+function reason(stderr, code, signal) {
+  if (signal) return `ffmpeg was stopped (${signal})`;
+  const lines = String(stderr || "")
+    .split(/\r?\n|\r/)
+    .filter((line) => line.trim() && !/^\s/.test(line))
+    .map((line) => line.replace(/^(\[[^\]]*\]\s*)+/, "").trim())
+    .filter((line) => line && !CLOSING.some((closing) => closing.test(line)));
+  const line = lines.filter((l) => WRONG.test(l)).pop() || lines.filter((l) => !INFO.test(l)).pop();
+  if (!line) return `ffmpeg exited with ${code}`;
+  return /ffmpeg/i.test(line) ? line : `ffmpeg: ${line}`;
+}
+
+// The ffmpeg processes running now, so a run that is stopped stops them
+// too: a signal sent to node alone does not reach them.
+const running = new Set();
+
+function stopChildren() {
+  for (const child of running) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Gone already.
+    }
+  }
+  running.clear();
 }
 
 function run(args, input) {
@@ -21,21 +74,21 @@ function run(args, input) {
       reject(err);
       return;
     }
+    running.add(child);
     const out = [];
     const err = [];
     child.stdout.on("data", (chunk) => out.push(chunk));
     child.stderr.on("data", (chunk) => err.push(chunk));
     child.on("error", (error) => {
+      running.delete(child);
       if (error.code === "ENOENT") reject(new Error("musicfit needs ffmpeg. Install it (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg) or set FFMPEG_PATH to it."));
       else reject(error);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      running.delete(child);
       const stderr = Buffer.concat(err).toString("utf8");
       if (code === 0) resolve({ chunks: out, stderr });
-      else {
-        const why = stderr.trim().split("\n").filter(Boolean).pop() || `ffmpeg exited with ${code}`;
-        reject(Object.assign(new Error(why), { stderr }));
-      }
+      else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr }));
     });
     if (input) {
       // ffmpeg may stop reading early when it fails; the error that follows
@@ -80,20 +133,25 @@ async function decode(file, { rate = RATE, channels = 2 } = {}) {
   }
 }
 
-// Writes interleaved stereo floats as a 24-bit WAV.
+// Writes interleaved stereo floats as a 24-bit WAV. bitexact leaves out the
+// header's note of the ffmpeg that wrote it, so any ffmpeg writes the same
+// bytes for the same sound.
 async function encodeWav(samples, file, { rate = RATE, channels = 2 } = {}) {
-  await run(["-v", "error", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-c:a", "pcm_s24le", "-y", file], samples);
+  await run(["-v", "error", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-c:a", "pcm_s24le", "-fflags", "+bitexact", "-y", file], samples);
 }
 
 // EBU R128 loudness as ffmpeg's ebur128 meter reads it: integrated
 // loudness (LUFS), true peak (dBTP, oversampled), loudness range (LU).
 // Silence reads -Infinity. loudnorm measures the same way but upsamples
-// everything to 192 kHz first, which is ten times slower.
-async function measure(samples, { rate = RATE, channels = 2 } = {}) {
-  const { stderr } = await run(["-v", "info", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-af", "ebur128=peak=true:framelog=quiet", "-f", "null", "-"], samples);
-  const summary = stderr.slice(stderr.lastIndexOf("Integrated loudness:"));
+// everything to 192 kHz first, which is ten times slower. framelog=verbose
+// keeps the meter's line for every 100 ms out of what -v info prints;
+// ffmpeg 4.4 has no quieter value, and the summary is the same.
+const METER = "ebur128=peak=true:framelog=verbose";
+
+function summary(stderr) {
+  const said = stderr.slice(stderr.lastIndexOf("Integrated loudness:"));
   const read = (label) => {
-    const m = new RegExp(`${label}:\\s*(-?inf|-?[\\d.]+)`).exec(summary);
+    const m = new RegExp(`${label}:\\s*(-?inf|-?[\\d.]+)`).exec(said);
     if (!m) throw new Error("ffmpeg's ebur128 printed no measurement");
     return /inf/.test(m[1]) ? -Infinity : Number(m[1]);
   };
@@ -101,4 +159,9 @@ async function measure(samples, { rate = RATE, channels = 2 } = {}) {
   return { integrated: integrated <= -70 ? -Infinity : integrated, truePeak: read("Peak"), range: read("LRA") };
 }
 
-module.exports = { RATE, decode, encodeWav, measure };
+async function measure(samples, { rate = RATE, channels = 2 } = {}) {
+  const { stderr } = await run(["-v", "info", "-nostats", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-af", METER, "-f", "null", "-"], samples);
+  return summary(stderr);
+}
+
+module.exports = { RATE, decode, encodeWav, measure, run, reason, stopChildren };

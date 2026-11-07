@@ -1,0 +1,34 @@
+#!/bin/sh
+# Stands in for ffmpeg 4.4 (Ubuntu 22.04's) where it differs in what
+# musicfit asks of it: its ebur128 meter takes only info and verbose for
+# framelog, and on any other value it stops with the lines 4.4 prints.
+# Anything else goes to the ffmpeg on PATH.
+for arg do
+  case $arg in
+    *framelog=info*|*framelog=verbose*) ;;
+    *framelog=*)
+      value=${arg##*framelog=}
+      value=${value%%:*}
+      cat >&2 <<LINES
+[ebur128 @ 0x55ac8659cec0] Unable to parse option value "$value"
+[ebur128 @ 0x55ac8659cec0] Error setting option framelog to value $value.
+[Parsed_ebur128_0 @ 0x55ac8659cdc0] Error applying options to the filter.
+[AVFilterGraph @ 0x55ac86515c80] Error initializing filter 'ebur128' with args '${arg#*ebur128=}'
+[Parsed_ebur128_0 @ 0x55ac8659cdc0] Summary:
+
+  Integrated loudness:
+    I:           0.0 LUFS
+    Threshold:   0.0 LUFS
+
+  True peak:
+    Peak:       -inf dBFS
+Error reinitializing filters!
+Failed to inject frame into filter network: Invalid argument
+Error while processing the decoded data for stream #0:0
+Conversion failed!
+LINES
+      exit 1
+      ;;
+  esac
+done
+exec ffmpeg "$@"

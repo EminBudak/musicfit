@@ -5,7 +5,36 @@ on:
     types: [created]
 
 jobs:
+  test:
+    # The same tests as on every push, on Ubuntu 22.04's ffmpeg 4.4 (the
+    # oldest musicfit works with, and the one the hosted service runs) and
+    # on ubuntu-latest's; nothing is published unless both pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg && ffmpeg -version | head -1
+
+      - name: Test
+        run: npm test
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
 
     permissions:
@@ -33,12 +62,6 @@ jobs:
             found="$(node -p "const m = require('./$file'); (m.plugins ? m.plugins[0] : m).version")"
             test "$found" = "$version" || { echo "$file says $found, package.json says $version"; exit 1; }
           done
-
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-
-      - name: Test
-        run: npm test
 
       - name: Publish with provenance
         run: npm publish --provenance --access public

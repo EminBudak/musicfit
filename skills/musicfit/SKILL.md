@@ -13,7 +13,7 @@ Music models ignore the length you ask for, and a track cut at the video's last 
 node <skill>/scripts/musicfit.js track.mp3 --length 32 --hit 27.5 --fps 30 --out audio/fit
 ```
 
-`<skill>` is this skill's folder. The script needs Node 22 or newer and ffmpeg on the machine; it installs nothing and needs no API key. A run takes a few seconds.
+`<skill>` is this skill's folder. The script needs Node 22 or newer and ffmpeg 4.4 or newer on the machine; it installs nothing and needs no API key. A run takes a few seconds.
 
 - `--length` is the video's length: seconds (`32`), frames (`960f`, at `--fps`) or minutes (`1:05`).
 - `--hit` is the second the drop should land on, for example the logo reveal. Leave it out and the track starts as it starts and ends on its own ending.

@@ -1,0 +1,7 @@
+[aost#0:0/pcm_s24le @ 0x6326ca169ec0] Error submitting a packet to the muxer: No space left on device
+    Last message repeated 1 times
+[out#0/wav @ 0x6326ca169a40] Error muxing a packet
+[out#0/wav @ 0x6326ca169a40] Task finished with error code: -28 (No space left on device)
+[out#0/wav @ 0x6326ca169a40] Terminating thread with return code -28 (No space left on device)
+[out#0/wav @ 0x6326ca169a40] Error writing trailer: No space left on device
+[out#0/wav @ 0x6326ca169a40] Error closing file: No space left on device

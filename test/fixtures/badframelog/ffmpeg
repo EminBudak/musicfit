@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH with the loudness meter's framelog value changed
+# to one no ffmpeg knows, so a test sees how this ffmpeg itself fails on a
+# value it does not take.
+for arg do
+  shift
+  case $arg in
+    *framelog=*) arg=$(printf '%s\n' "$arg" | sed 's/framelog=[a-z]*/framelog=nosuchvalue/') ;;
+  esac
+  set -- "$@" "$arg"
+done
+exec ffmpeg "$@"
