@@ -88,7 +88,7 @@ function run(args, input) {
       running.delete(child);
       const stderr = Buffer.concat(err).toString("utf8");
       if (code === 0) resolve({ chunks: out, stderr });
-      else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr }));
+      else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr, signal }));
     });
     if (input) {
       // ffmpeg may stop reading early when it fails; the error that follows

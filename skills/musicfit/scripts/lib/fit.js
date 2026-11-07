@@ -1,7 +1,9 @@
 "use strict";
 
 // The whole run: decode, analyse, plan, assemble, duck, set the loudness,
-// and write fitted.wav (and mix.wav), cues.json, seams.png and FIT.md.
+// and write fitted.wav (and mix.wav), cues.json, seams.png and FIT.md, in
+// a hidden folder that takes the place of the earlier files only once the
+// run has ended well (see out.js).
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -11,6 +13,7 @@ const { plan } = require("./plan");
 const { assemble, speech, duck, normalize, interleave, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
+const { claim, begin } = require("./out");
 const version = require("./version");
 
 function split(interleaved) {
@@ -35,38 +38,27 @@ function slug(file) {
   );
 }
 
-// The files musicfit writes; anything else in the folder is left alone.
-const OUTPUTS = ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"];
-
-function prepare(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-  for (const name of OUTPUTS) fs.rmSync(path.join(dir, name), { force: true });
-}
-
-// Whether the folder to write to can be made, checked before any work so a
-// run does not fail at its end over it (and so a recursive mkdir is never
-// tried where it does not return, such as /proc): the nearest folder that
-// exists has to be one, and writable.
-function writable(dir) {
-  let at = path.resolve(dir);
-  while (!fs.existsSync(at)) at = path.dirname(at);
-  try {
-    if (!fs.statSync(at).isDirectory()) throw Object.assign(new Error(`${at} is a file`), { code: "ENOTDIR" });
-    fs.accessSync(at, fs.constants.W_OK);
-  } catch (err) {
-    const why = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "the disk is read-only", ENOTDIR: "a file is in the way" }[err.code] || err.message;
-    throw new Error(`Cannot write to ${dir}: ${why}`);
-  }
-}
-
 // options: { length, hit, drop, fps, voice, duck, lufs, end, fade, bpm,
 // meter, out, analyze, log }
 async function fit(track, options) {
-  const log = options.log || (() => {});
   const dir = options.out || `musicfit-${slug(track)}`;
-  const trackName = path.basename(track);
   if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
-  writable(dir);
+  claim(dir, options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), "cues.json", "seams.png", "FIT.md"]);
+  const run = begin(dir);
+  try {
+    const result = await make(track, options, run);
+    run.commit();
+    return { dir, ...result };
+  } catch (err) {
+    run.abort();
+    throw err;
+  }
+}
+
+// The run's work, its files written with run.file(name).
+async function make(track, options, run) {
+  const log = options.log || (() => {});
+  const trackName = path.basename(track);
   log(`Reading ${trackName}`);
   // The interleaved copy is let go as soon as it is split.
   const [source, mono] = await Promise.all([decode(track, { rate: RATE, channels: 2 }).then(split), decode(track, { rate: ANALYSIS_RATE, channels: 1 })]);
@@ -81,12 +73,11 @@ async function fit(track, options) {
   else log("No steady beat");
 
   if (options.analyze) {
-    prepare(dir);
     const c = analysisCues({ version, track: trackName, analysis: a, options });
-    fs.writeFileSync(path.join(dir, "cues.json"), JSON.stringify(c, null, 2) + "\n");
-    fs.writeFileSync(path.join(dir, "FIT.md"), analysisMarkdown(c, { trackName }));
-    fs.writeFileSync(path.join(dir, "seams.png"), seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
-    return { dir, cues: c, analysis: a };
+    fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
+    fs.writeFileSync(run.file("FIT.md"), analysisMarkdown(c, { trackName }));
+    fs.writeFileSync(run.file("seams.png"), seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
+    return { cues: c, analysis: a };
   }
 
   if (options.hit !== undefined && options.hit > options.length) throw new Error(`--hit ${options.hit} is past the end (--length ${options.length})`);
@@ -120,14 +111,13 @@ async function fit(track, options) {
     if (!spans.length) options.warnings = [...(options.warnings || []), "No speech was found in the voice track, so the music was not ducked."];
   }
 
-  prepare(dir);
-  await encodeWav(interleave(music), path.join(dir, "fitted.wav"));
-  if (mix) await encodeWav(interleave(mix), path.join(dir, "mix.wav"));
+  await encodeWav(interleave(music), run.file("fitted.wav"));
+  if (mix) await encodeWav(interleave(mix), run.file("mix.wav"));
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice });
-  fs.writeFileSync(path.join(dir, "cues.json"), JSON.stringify(c, null, 2) + "\n");
-  fs.writeFileSync(path.join(dir, "FIT.md"), fitMarkdown(c, { trackName }));
-  fs.writeFileSync(path.join(dir, "seams.png"), seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
-  return { dir, cues: c, analysis: a, plan: p };
+  fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
+  fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName }));
+  fs.writeFileSync(run.file("seams.png"), seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
+  return { cues: c, analysis: a, plan: p };
 }
 
 module.exports = { fit };

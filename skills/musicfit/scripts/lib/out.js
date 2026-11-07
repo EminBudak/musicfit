@@ -1,0 +1,299 @@
+"use strict";
+
+// The out folder. A run makes its files in a hidden folder and puts them in
+// place only once it has ended well: the hidden folder is inside the out
+// folder when that is there already, and next to it when the run makes it,
+// so it is on the same disk and gets the same mode and default ACL. A run
+// that fails, is refused or is stopped leaves the out folder as it was and
+// adds nothing to it. A run that ends well moves the earlier run's files
+// aside, moves its own in, then removes the earlier ones, so at no moment
+// are both gone; files musicfit does not write are left alone.
+
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+
+// The names musicfit writes in its folder.
+const OUTPUTS = ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"];
+// A run's hidden folder, .musicfit-part-<pid>-<8 hex digits>.
+const PART = /^\.musicfit-part-(\d+)-[0-9a-f]{8}$/;
+// A run killed outright cannot remove its hidden folder. A later run that
+// ends well in that place removes it once its process is gone and nothing
+// in it has changed for this long, so a run on another machine sharing the
+// folder keeps its own while it works.
+const STALE = 15 * 60 * 1000;
+
+const lstat = (at) => fs.lstatSync(at, { throwIfNoEntry: false });
+
+// Whether the folder to write to can be made, checked before any work so a
+// run does not fail at its end over it (and so a recursive mkdir is never
+// tried where it does not return, such as /proc): the nearest folder that
+// exists has to be one, and writable.
+function writable(dir) {
+  let at = path.resolve(dir);
+  while (!fs.existsSync(at)) at = path.dirname(at);
+  try {
+    if (!fs.statSync(at).isDirectory()) throw Object.assign(new Error(`${at} is a file`), { code: "ENOTDIR" });
+    fs.accessSync(at, fs.constants.W_OK);
+  } catch (err) {
+    const why = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "the disk is read-only", ENOTDIR: "a file is in the way" }[err.code] || err.message;
+    throw new Error(`Cannot write to ${dir}: ${why}`);
+  }
+}
+
+// The earlier run's files in `dir`: the names musicfit writes that are
+// there as files or links. A folder under one of those names is not
+// musicfit's, and stays.
+function earlier(dir) {
+  return OUTPUTS.filter((name) => {
+    const s = lstat(path.join(dir, name));
+    return Boolean(s) && !s.isDirectory();
+  });
+}
+
+// Checked before any work, for the names this run writes: the folder can be
+// written, and none of them is a folder there.
+function claim(dir, writes) {
+  writable(dir);
+  if (!fs.existsSync(dir)) return;
+  for (const name of writes) {
+    const s = lstat(path.join(dir, name));
+    if (s && s.isDirectory()) throw new Error(`${path.join(dir, name)} is a folder, and this run writes its ${name} there: move it, or give another --out`);
+  }
+}
+
+// Windows can refuse a rename for a moment while a virus scanner or a sync
+// client reads a file that was just written, so it is tried again for up to
+// two seconds there. Synchronous, like the whole commit.
+function rename(from, to) {
+  for (let waited = 0; ; waited += 50) {
+    try {
+      return fs.renameSync(from, to);
+    } catch (err) {
+      if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(err.code) || waited >= 2000) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
+function remove(at) {
+  try {
+    fs.rmSync(at, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch {
+    // A file held open (on Windows) keeps it; a later run removes it.
+  }
+}
+
+// The runs that have begun and not ended, for a stop to undo.
+const live = new Set();
+let hooked = false;
+
+// begin(dir): the hidden folder a run writes in. file(name) is where the
+// run writes an output, scratch(name) where it keeps what is not one;
+// commit() puts the outputs in place, abort() leaves no trace.
+function begin(dir) {
+  const target = path.resolve(dir);
+  const home = fs.existsSync(target) ? target : path.dirname(target);
+  // The folders made for the hidden one, deepest first, removed again
+  // when the run does not end well.
+  const made = [];
+  for (let at = home; !fs.existsSync(at); at = path.dirname(at)) made.push(at);
+  fs.mkdirSync(home, { recursive: true });
+  // mkdirSync with the default mode: under a default ACL the folder gets
+  // the access the out folder gives (mkdtemp's 0700 would shut out the
+  // others the ACL lets in).
+  const work = path.join(home, `.musicfit-part-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
+  fs.mkdirSync(work);
+  const temp = path.join(work, ".tmp");
+  fs.mkdirSync(temp);
+  const state = {
+    dir,
+    target,
+    work,
+    made,
+    ended: false,
+    file: (name) => path.join(work, name),
+    scratch: (name) => path.join(temp, name),
+    commit: () => commit(state),
+    abort: () => abort(state),
+  };
+  live.add(state);
+  if (!hooked) {
+    hooked = true;
+    // However the process ends, no hidden folder of a run that has not
+    // ended is left behind, and no ffmpeg of it runs on.
+    process.on("exit", stopAll);
+  }
+  return state;
+}
+
+function ended(state) {
+  state.ended = true;
+  live.delete(state);
+}
+
+// What a failed move says: the file it was, or the folder when the whole
+// hidden folder was being moved.
+function moveError(state, err) {
+  const name = err.file ? path.join(state.dir, err.file) : state.dir;
+  const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
+  return { held, why: held ? `${name} is held open by another program, or may not be changed (${err.code})` : err.file ? `${name}: ${err.message}` : err.message };
+}
+
+// Puts the run's files in place, synchronously, so no signal handler runs
+// in the middle of it. cues.json is moved aside first and in last, so a
+// commit cut short never leaves a cues.json that speaks for files it does
+// not describe. Any move that fails puts back what was moved.
+function commit(state) {
+  const { target, work } = state;
+  fs.rmSync(path.join(work, ".tmp"), { recursive: true, force: true });
+  const fresh = OUTPUTS.filter((name) => fs.existsSync(path.join(work, name)));
+  if (!fs.existsSync(target)) {
+    // The run made the folder: the hidden one becomes it.
+    try {
+      rename(work, target);
+    } catch (err) {
+      const { held, why } = moveError(state, err);
+      throw new Error(`Could not put the new files in ${state.dir}: ${why}. Nothing was made${held ? "; close the file and run again" : ""}.`);
+    }
+    ended(state);
+    sweep(path.dirname(target));
+    return;
+  }
+  const before = earlier(target);
+  const old = path.join(work, ".old");
+  fs.mkdirSync(old);
+  const moved = [];
+  const move = (from, to, name) => {
+    try {
+      rename(from, to);
+    } catch (err) {
+      throw Object.assign(err, { file: name });
+    }
+    moved.push([from, to]);
+  };
+  const aside = (name) => {
+    if (before.includes(name)) move(path.join(target, name), path.join(old, name), name);
+  };
+  const into = (name) => {
+    if (!fresh.includes(name)) return;
+    if (lstat(path.join(target, name))) throw Object.assign(new Error("a file came there while the run worked"), { file: name });
+    move(path.join(work, name), path.join(target, name), name);
+  };
+  try {
+    aside("cues.json");
+    for (const name of OUTPUTS.filter((n) => n !== "cues.json")) {
+      aside(name);
+      into(name);
+    }
+    into("cues.json");
+  } catch (err) {
+    const stuck = [];
+    for (const [from, to] of moved.reverse()) {
+      try {
+        rename(to, from);
+      } catch {
+        stuck.push(to);
+      }
+    }
+    const { held, why } = moveError(state, err);
+    if (stuck.length) {
+      // What could not be put back stays, in a folder no later run removes.
+      ended(state);
+      const kept = keep(state, stuck);
+      throw new Error(`Could not put the new files in ${state.dir}: ${why}. Some of the earlier files could not be put back: they are in ${kept}.`);
+    }
+    throw new Error(`Could not put the new files in ${state.dir}: ${why}. ${state.dir} is as it was${held ? "; close the file and run again" : ""}.`);
+  }
+  ended(state);
+  // The earlier files, and the hidden folder with them.
+  remove(work);
+  sweep(target);
+  sweep(path.dirname(target));
+}
+
+function keep(state, stuck) {
+  const to = path.join(path.dirname(state.work), path.basename(state.work).replace(/^\.musicfit-part-/, "musicfit-kept-"));
+  try {
+    fs.writeFileSync(path.join(state.work, "musicfit-kept.txt"), `A musicfit run could not put these files back in ${state.dir}:\n${stuck.map((f) => `  ${path.relative(state.work, f)}`).join("\n")}\nMove them where they belong, then remove this folder. musicfit leaves it alone.\n`);
+    rename(state.work, to);
+    return to;
+  } catch {
+    return state.work;
+  }
+}
+
+function abort(state) {
+  if (state.ended) return;
+  ended(state);
+  remove(state.work);
+  for (const folder of state.made) {
+    try {
+      // Empty folders only: another run may be at work in one.
+      fs.rmdirSync(folder);
+    } catch {
+      break;
+    }
+  }
+}
+
+// Stops every run of this process that has not ended: their ffmpeg, then
+// their hidden folders. Returns the out folders they were writing.
+function stopAll() {
+  require("./audio").stopChildren();
+  const dirs = [...live].map((state) => state.dir);
+  for (const state of [...live]) abort(state);
+  return dirs;
+}
+
+// Whether a process of that number runs on this machine.
+function running(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+// The newest time anything in a folder was changed, two levels down.
+function touched(folder) {
+  let newest = 0;
+  const look = (at, depth) => {
+    const s = lstat(at);
+    if (!s) return;
+    newest = Math.max(newest, s.mtimeMs);
+    if (depth > 0 && s.isDirectory()) {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(at);
+      } catch {
+        return;
+      }
+      for (const entry of entries) look(path.join(at, entry), depth - 1);
+    }
+  };
+  look(folder, 2);
+  return newest;
+}
+
+// Removes the hidden folders of runs killed outright: their process is
+// gone and nothing in them has changed for STALE. Nothing in one is put
+// back: the run that ends well here has made the folder what it should be.
+function sweep(folder) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(folder, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const m = PART.exec(entry.name);
+    if (!m || !entry.isDirectory()) continue;
+    const at = path.join(folder, entry.name);
+    if (running(Number(m[1])) || Date.now() - touched(at) < STALE) continue;
+    remove(at);
+  }
+}
+
+module.exports = { OUTPUTS, writable, claim, begin, stopAll, sweep, earlier };

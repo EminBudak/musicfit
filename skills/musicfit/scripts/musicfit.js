@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 "use strict";
 
+const fs = require("node:fs");
+const os = require("node:os");
 const { fit } = require("./lib/fit");
+const { stopAll } = require("./lib/out");
 const version = require("./lib/version");
 
 const USAGE = `Usage: musicfit <track> --length <time> [options]
@@ -139,6 +142,47 @@ function summary({ dir, cues: c }) {
   return lines.join("\n");
 }
 
+// A run stopped with Ctrl-C or a signal stops its ffmpeg and removes what
+// it had made, so the out folder is left as it was, says so, and ends by
+// that signal. A second signal, like the copy makersmcp's supervisor
+// passes on a moment after the one its process group got, finds the
+// listener still there and changes nothing.
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
+let stopping = false;
+
+// Written at once: a pipe can be asynchronous, and the process ends next.
+function say(fd, text) {
+  try {
+    fs.writeSync(fd, text);
+  } catch {
+    // Nobody is reading.
+  }
+}
+
+function stopOnSignals(json) {
+  for (const signal of SIGNALS) {
+    process.on(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      for (const dir of stopAll()) {
+        const message = `stopped, so ${dir} is as it was`;
+        if (json) say(1, JSON.stringify({ ok: false, error: message }) + "\n");
+        say(2, `musicfit: ${message}\n`);
+      }
+      for (const name of SIGNALS) process.removeAllListeners(name);
+      const code = 128 + os.constants.signals[signal];
+      try {
+        process.kill(process.pid, signal);
+      } catch {
+        // Windows cannot raise every signal.
+        process.exit(code);
+      }
+      // Only reached where that signal does not end a process.
+      setTimeout(() => process.exit(code), 100);
+    });
+  }
+}
+
 async function main() {
   let options;
   try {
@@ -149,10 +193,16 @@ async function main() {
   }
   if (options.help) return void process.stdout.write(`${USAGE}\n`);
   if (options.version) return void process.stdout.write(`${version}\n`);
+  stopOnSignals(options.json);
   try {
     const result = await fit(options.track, { ...options, log: options.json ? () => {} : (line) => process.stderr.write(`${line}\n`) });
     process.stdout.write(options.json ? JSON.stringify(result.cues, null, 2) + "\n" : summary(result) + "\n");
   } catch (err) {
+    // When the whole process group is stopped, as with Ctrl-C, ffmpeg can
+    // end before this process hears its own signal: a failed ffmpeg gives
+    // that signal a moment to come. A stopped run has said so and ends by it.
+    if (err.stderr !== undefined) await new Promise((resolve) => setTimeout(resolve, 200));
+    if (stopping) return;
     if (options.json) process.stdout.write(JSON.stringify({ ok: false, error: err.message }) + "\n");
     process.stderr.write(`musicfit: ${err.message}\n`);
     process.exit(1);
