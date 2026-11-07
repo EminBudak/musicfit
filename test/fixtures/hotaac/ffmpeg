@@ -1,0 +1,35 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, except the first loudness measurement of an .m4a,
+# the AAC sound of video.mp4, which reads a true peak over -1 dBTP, as the
+# AAC encoding can leave one. It leaves a line in $MUSICFIT_TEST_STATE for
+# every AAC it encodes, so a test can count them.
+meter= m4a= aac=
+for arg do
+  case $arg in
+    ebur128=*) meter=1 ;;
+    *.m4a) m4a=1 ;;
+    aac) aac=1 ;;
+  esac
+done
+if [ -n "$meter" ] && [ -n "$m4a" ] && [ ! -e "$MUSICFIT_TEST_STATE.measured" ]; then
+  : > "$MUSICFIT_TEST_STATE.measured"
+  cat >&2 <<LINES
+[Parsed_ebur128_0 @ 0x55ac8659cdc0] Summary:
+
+  Integrated loudness:
+    I:         -14.0 LUFS
+    Threshold: -24.0 LUFS
+
+  Loudness range:
+    LRA:         5.0 LU
+    Threshold: -34.0 LUFS
+    LRA low:   -18.0 LUFS
+    LRA high:  -13.0 LUFS
+
+  True peak:
+    Peak:       -0.4 dBFS
+LINES
+  exit 0
+fi
+if [ -n "$aac" ] && [ -n "$m4a" ]; then echo encoded >> "$MUSICFIT_TEST_STATE"; fi
+exec ffmpeg "$@"

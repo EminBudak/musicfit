@@ -398,6 +398,29 @@ test("an HEVC picture is tagged hvc1 in video.mp4, so Apple's players take it", 
   assert.deepEqual(packets(path.join(out, "video.mp4")), packets(hevc));
 });
 
+test("the video's own sound is read on its timeline: a sound that starts a second after the picture is a second late in video.mp4 too", async () => {
+  const late = at("late.mp4");
+  if (!fs.existsSync(late)) ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-itsoffset", "1", "-i", speech(), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "mpeg4", "-q:v", "6", "-c:a", "aac", "-t", "12", late]);
+  const out = at("late-fit");
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", late, "--video-sound", "voice", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  // speech.wav speaks from 2 s: in this video, from 3 s.
+  const spans = cuesOf(out).video.spans;
+  assert.ok(Math.abs(spans[0].from - 3) < 0.15, JSON.stringify(spans));
+});
+
+test("an AAC that lifts the true peak over -1 dBTP is limited again and encoded again", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const state = at(`hotaac-${process.hrtime.bigint()}`);
+  const out = at("hotaac-fit");
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", out], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "hotaac", "ffmpeg"), MUSICFIT_TEST_STATE: state } });
+  assert.equal(run.status, 0, run.stderr);
+  // The stand-in read the first AAC at -0.4 dBTP: a second one was made.
+  assert.equal(fs.readFileSync(state, "utf8").trim().split("\n").length, 2);
+  const c = cuesOf(out);
+  assert.ok(c.video.loudness.truePeak <= -1, `true peak ${c.video.loudness.truePeak} dBTP`);
+  assert.deepEqual(c.warnings.filter((w) => /AAC/.test(w)), []);
+});
+
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
   const { fitMarkdown, underVideo } = require("../skills/musicfit/scripts/lib/report");
   const base = {
