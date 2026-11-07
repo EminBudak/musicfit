@@ -11,6 +11,7 @@
 // write are left alone.
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
@@ -27,6 +28,13 @@ const PART = /^\.musicfit-part-(\d+)-[0-9a-f]{8}$/;
 // in it has changed for this long, so a run on another machine sharing the
 // folder keeps its own while it works.
 const STALE = 15 * 60 * 1000;
+// Held in the out folder while a run puts its files there, so two runs that
+// end at the same moment take turns. A commit holds it for a few renames;
+// one older than LOCK_STALE was left by a run killed while it held it.
+const LOCK = ".musicfit-commit";
+const LOCK_STALE = 60 * 1000;
+const LOCK_WAIT = 90 * 1000;
+
 const lstat = (at) => fs.lstatSync(at, { throwIfNoEntry: false });
 
 const WHY = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "the disk is read-only", ENOTDIR: "a file is in the way", ENOSPC: "the disk is full", EDQUOT: "the disk quota is used up" };
@@ -85,7 +93,7 @@ function claim(dir, writes) {
 
 // Windows can refuse a rename for a moment while a virus scanner or a sync
 // client reads a file that was just written, so it is tried again for up to
-// two seconds there. Synchronous, like the whole commit.
+// two seconds there. Synchronous, like the swap it is part of.
 function rename(from, to) {
   for (let waited = 0; ; waited += 50) {
     try {
@@ -181,38 +189,116 @@ function ended(state, well) {
   if (well) unfinished.delete(state);
 }
 
-// What a failed move says: the file it was, or the folder when the whole
-// hidden folder was being moved.
+// What a failed move says: the file it was, or the folder.
 function moveError(state, err) {
   const name = err.file ? path.join(state.dir, err.file) : state.dir;
   const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
   return { held, why: held ? `${name} is held open by another program, or may not be changed (${err.code})` : err.file ? `${name}: ${err.message}` : err.message };
 }
 
-// Puts the run's files in place, synchronously, so no signal handler runs
-// in the middle of it. cues.json is moved aside first and in last, so a
-// commit cut short never leaves a cues.json that speaks for files it does
-// not describe. Any move that fails puts back what was moved.
-function commit(state) {
-  const { target } = state;
-  const work = open(state);
-  remove(path.join(work, ".tmp"));
-  const fresh = NAMES.filter((name) => fs.existsSync(path.join(work, name)));
-  if (!fs.existsSync(target)) {
-    // The run made the folder: the hidden one becomes it.
-    try {
-      rename(work, target);
-    } catch (err) {
-      const { held, why } = moveError(state, err);
-      throw new Error(`Could not put the new files in ${state.dir}: ${why}. Nothing was made${held ? "; close the file and run again" : ""}.`);
-    }
-    ended(state, true);
-    sweep(path.dirname(target));
-    return;
+// The lock: a file made only if it is not there, naming the machine and the
+// process that holds it.
+function lock(at) {
+  try {
+    fs.writeFileSync(at, `${os.hostname()} ${process.pid}\n`, { flag: "wx" });
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST") return false;
+    throw err;
   }
+}
+
+// Whether a lock is one a killed run left: its process is gone from this
+// machine, or it has been held far longer than any commit takes.
+function staleLock(at) {
+  let text;
+  let s;
+  try {
+    text = fs.readFileSync(at, "utf8");
+    s = fs.statSync(at);
+  } catch {
+    return null;
+  }
+  const [host, pid] = text.trim().split(" ");
+  const gone = host === os.hostname() && Number(pid) > 0 && !running(Number(pid));
+  return gone || Date.now() - s.mtimeMs > LOCK_STALE ? text : null;
+}
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Puts the run's files in place. Two runs that share an out folder take
+// turns: each holds the lock while it moves its files, and waits while
+// another holds it. The moves themselves are synchronous, so no signal
+// handler runs in the middle of them.
+async function commit(state) {
+  const { target } = state;
+  open(state);
+  remove(path.join(state.work, ".tmp"));
+  const at = path.join(target, LOCK);
+  const started = Date.now();
+  for (;;) {
+    if (state.ended) throw new Error(`stopped, so ${state.dir} is as it was`);
+    // The out folder, made now when the run is the first to write there.
+    if (!fs.existsSync(target)) {
+      try {
+        fs.mkdirSync(target);
+        state.made.unshift(target);
+      } catch (err) {
+        if (err.code !== "EEXIST") throw new Error(`Could not put the new files in ${state.dir}: ${WHY[err.code] || err.message}. Nothing was made.`);
+      }
+    }
+    let held = false;
+    try {
+      held = lock(at);
+    } catch (err) {
+      // The folder went again in the meantime: it is made again.
+      if (err.code !== "ENOENT") throw new Error(`Could not put the new files in ${state.dir}: ${WHY[err.code] || err.message}. ${state.dir} is as it was.`);
+    }
+    if (held) {
+      try {
+        swap(state);
+      } finally {
+        try {
+          fs.unlinkSync(at);
+        } catch {
+          // Gone already.
+        }
+      }
+      break;
+    }
+    const stale = staleLock(at);
+    if (stale !== null) {
+      // Taken away only while it is still the one found stale.
+      if (staleLock(at) === stale) fs.rmSync(at, { force: true });
+      continue;
+    }
+    if (Date.now() - started > LOCK_WAIT) throw new Error(`Could not put the new files in ${state.dir}: another musicfit run has been putting its files there for ${LOCK_WAIT / 1000} s. ${state.dir} is as it was.`);
+    await pause(25);
+  }
+  // The earlier files, and the hidden folder with them.
+  remove(state.work);
+  sweep(target);
+  sweep(path.dirname(target));
+}
+
+// What tells a file from one that came in its place: a new file can get
+// the number of one just removed, but not its times too.
+function identity(at) {
+  const s = fs.lstatSync(at, { bigint: true, throwIfNoEntry: false });
+  return s ? `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}` : null;
+}
+
+// The moves, with the lock held. cues.json is moved aside first and in
+// last, so a commit cut short never leaves a cues.json that speaks for
+// files it does not describe. A move that fails puts back what was moved,
+// each file only while it is still the one this run moved and its place is
+// free; what cannot go back waits in a folder no later run removes.
+function swap(state) {
+  const { target, work } = state;
+  const fresh = NAMES.filter((name) => fs.existsSync(path.join(work, name)));
   const before = earlier(target);
   const old = path.join(work, ".old");
-  fs.mkdirSync(old);
+  fs.mkdirSync(old, { recursive: true });
   const moved = [];
   const move = (from, to, name) => {
     try {
@@ -220,7 +306,7 @@ function commit(state) {
     } catch (err) {
       throw Object.assign(err, { file: name });
     }
-    moved.push([from, to]);
+    moved.push({ from, to, id: identity(to) });
   };
   const aside = (name) => {
     if (before.includes(name)) move(path.join(target, name), path.join(old, name), name);
@@ -239,16 +325,17 @@ function commit(state) {
     into("cues.json");
   } catch (err) {
     const stuck = [];
-    for (const [from, to] of moved.reverse()) {
+    for (const m of moved.reverse()) {
+      const ours = m.id !== null && identity(m.to) === m.id;
       try {
-        rename(to, from);
+        if (!ours || lstat(m.from)) throw new Error("changed");
+        rename(m.to, m.from);
       } catch {
-        stuck.push(to);
+        if (ours) stuck.push(m.to);
       }
     }
     const { held, why } = moveError(state, err);
     if (stuck.length) {
-      // What could not be put back stays, in a folder no later run removes.
       ended(state, false);
       const kept = keep(state, stuck);
       throw new Error(`Could not put the new files in ${state.dir}: ${why}. Some of the earlier files could not be put back: they are in ${kept}.`);
@@ -256,10 +343,6 @@ function commit(state) {
     throw new Error(`Could not put the new files in ${state.dir}: ${why}. ${state.dir} is as it was${held ? "; close the file and run again" : ""}.`);
   }
   ended(state, true);
-  // The earlier files, and the hidden folder with them.
-  remove(work);
-  sweep(target);
-  sweep(path.dirname(target));
 }
 
 function keep(state, stuck) {
@@ -339,4 +422,4 @@ function sweep(folder) {
   }
 }
 
-module.exports = { OUTPUTS, NAMES, writable, claim, begin, stopAll, sweep, earlier };
+module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier };

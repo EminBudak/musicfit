@@ -20,6 +20,11 @@ const posix = { skip: process.platform === "win32" ? "the stand-ins are shell sc
 
 const cli = (args, env = {}) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
 
+// The number of a process that has ended.
+function deadPid() {
+  return spawnSync(process.execPath, ["-e", ""]).pid;
+}
+
 // Every entry of a folder, hidden ones too, with a hash of each file.
 function snapshot(folder) {
   const out = {};
@@ -180,11 +185,6 @@ test("a folder under the name of a file a run writes stops it before any work, a
   assert.equal(fs.readFileSync(path.join(out, "mix.wav", "take.wav"), "utf8"), "mine\n");
 });
 
-// The number of a process that has ended.
-function deadPid() {
-  return spawnSync(process.execPath, ["-e", ""]).pid;
-}
-
 function age(folder, minutes) {
   const then = new Date(Date.now() - minutes * 60000);
   const walk = (at) => {
@@ -224,7 +224,7 @@ test("files made in the hidden folder get the access a default ACL gives the out
   if (set.error || set.status !== 0) return t.skip("setfacl is not there, or this disk has no ACLs");
   const acl = (at) => spawnSync("getfacl", ["-cp", at], { encoding: "utf8" }).stdout;
   const { file } = fixture("house");
-  // Made by the run, next to where it goes, and renamed into place.
+  // Made by the run when it put its files in place.
   const made = path.join(base, "made");
   assert.equal(cli([file, "--length", "12", "--out", made]).status, 0);
   fs.mkdirSync(path.join(base, "plain"));
@@ -235,7 +235,7 @@ test("files made in the hidden folder get the access a default ACL gives the out
   for (const name of ["fitted.wav", "cues.json"]) assert.equal(acl(path.join(base, "plain", name)), acl(path.join(base, "plain", "by-hand.wav")), name);
 });
 
-test("a commit moves the earlier cues.json aside first and the new one in last, and one that fails half way puts every earlier file back", () => {
+test("a commit moves the earlier cues.json aside first and the new one in last, and one that fails half way puts every earlier file back", async () => {
   const folder = goodFit("commit-order");
   const fill = (run) => {
     for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
@@ -249,7 +249,7 @@ test("a commit moves the earlier cues.json aside first and the new one in last, 
     };
     const run = out.begin(folder);
     fill(run);
-    run.commit();
+    await run.commit();
   } finally {
     fs.renameSync = real;
   }
@@ -269,12 +269,78 @@ test("a commit moves the earlier cues.json aside first and the new one in last, 
     };
     const run = out.begin(again);
     fill(run);
-    assert.throws(() => run.commit(), /Could not put the new files in .*: not now\. .* is as it was\./);
+    await assert.rejects(run.commit(), /Could not put the new files in .*: not now\. .* is as it was\./);
     run.abort();
   } finally {
     fs.renameSync = real;
   }
   assert.deepEqual(snapshot(again), earlier);
+});
+
+test("a commit that fails never moves back over a file that came in its place, nor takes away one that is not its own", async () => {
+  const folder = goodFit("commit-guarded");
+  const real = fs.renameSync;
+  let count = 0;
+  try {
+    // The third move puts the new fitted.wav in; at the fourth, another
+    // program has put a file of its own there, and the move fails.
+    fs.renameSync = (from, to) => {
+      if (++count === 4) {
+        fs.rmSync(path.join(folder, "fitted.wav"));
+        fs.writeFileSync(path.join(folder, "fitted.wav"), "another program's\n");
+        throw Object.assign(new Error("not now"), { code: "EIO" });
+      }
+      return real(from, to);
+    };
+    const run = out.begin(folder);
+    for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+    await assert.rejects(run.commit(), /Some of the earlier files could not be put back: they are in .*musicfit-kept-/);
+    run.abort();
+  } finally {
+    fs.renameSync = real;
+  }
+  assert.equal(fs.readFileSync(path.join(folder, "fitted.wav"), "utf8"), "another program's\n");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).musicfit, require("../package.json").version);
+  const kept = fs.readdirSync(folder).find((e) => e.startsWith("musicfit-kept-"));
+  assert.ok(fs.existsSync(path.join(folder, kept, ".old", "fitted.wav")), "the earlier fitted.wav is not in the kept folder");
+});
+
+test("two runs that put their files in one folder at the same moment take turns, and the later one's files are what is left", async () => {
+  const folder = goodFit("taking-turns");
+  const fill = (run, who) => {
+    for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `${who} ${name}\n`);
+    fs.writeFileSync(run.file("cues.json"), JSON.stringify({ musicfit: "test", file: "fitted.wav", mix: null, video: null, run: who }) + "\n");
+  };
+  const a = out.begin(folder);
+  fill(a, "A");
+  const b = out.begin(folder);
+  fill(b, "B");
+  const real = fs.renameSync;
+  let later = null;
+  try {
+    // B ends while A moves its first file, as another process would.
+    fs.renameSync = (from, to) => {
+      const done = real(from, to);
+      if (!later) later = b.commit();
+      return done;
+    };
+    await a.commit();
+  } finally {
+    fs.renameSync = real;
+  }
+  await later;
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) assert.equal(fs.readFileSync(path.join(folder, name), "utf8"), `B ${name}\n`);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).run, "B");
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+});
+
+test("the lock a run killed while it moved its files left is taken over", async () => {
+  const folder = goodFit("stale-lock");
+  fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${deadPid()}\n`);
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  await run.commit();
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
 });
 
 test("the hidden folder is made only when the run writes its first file, and one that cannot be made leaves nothing and says why", () => {

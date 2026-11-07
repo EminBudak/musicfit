@@ -77,7 +77,7 @@ async function fit(track, options) {
     const video = o.video && !o.analyze ? await readVideo(track, o) : null;
     if (o.fps === undefined) o.fps = 30;
     const result = await make(track, o, run, video);
-    run.commit();
+    await run.commit();
     return { dir, ...result };
   } catch (err) {
     run.abort();
