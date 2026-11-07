@@ -267,3 +267,23 @@ test("--analyze and a fit keep their own default folders, so reading a track nev
   assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-analysis-house", "cues.json"), "utf8")).mode, "analysis");
   assert.deepEqual(fs.readdirSync(path.join(cwd, "musicfit-analysis-house")).sort(), ["FIT.md", "cues.json", "seams.png"]);
 });
+
+test("a track named in any script gets a folder of its own, and one with no letters a short hash", () => {
+  const { slug } = require("../skills/musicfit/scripts/lib/fit");
+  assert.equal(slug("песня один.wav"), "песня-один");
+  assert.equal(slug("歌 二.mp3"), "歌-二");
+  assert.equal(slug("Şarkı Güzel.mp3"), "sarkı-guzel");
+  assert.equal(slug("İstanbul.m4a"), "istanbul");
+  assert.equal(slug("Café del Mar (Remix).flac"), "cafe-del-mar-remix");
+  assert.equal(slug("موسيقى.wav"), "موسيقى");
+  assert.equal(slug("트랙.wav"), "트랙");
+  assert.match(slug("!!!.wav"), /^track-[0-9a-f]{6}$/);
+  assert.notEqual(slug("!!!.wav"), slug("???.wav"));
+  assert.equal(Array.from(slug(`${"а".repeat(100)}.wav`)).length, 60);
+
+  const cwd = path.join(dir, "scripts");
+  fs.mkdirSync(cwd);
+  for (const name of ["песня один.wav", "歌 二.wav"]) fs.copyFileSync(fixture("house").file, path.join(cwd, name));
+  for (const name of ["песня один.wav", "歌 二.wav"]) assert.equal(spawnSync(process.execPath, [CLI, name, "--length", "10"], { cwd, encoding: "utf8" }).status, 0);
+  assert.deepEqual(fs.readdirSync(cwd).filter((e) => e.startsWith("musicfit-")).sort(), ["musicfit-песня-один", "musicfit-歌-二"].sort());
+});

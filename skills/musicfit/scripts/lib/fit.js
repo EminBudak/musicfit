@@ -7,6 +7,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { RATE, decode, encodeWav, measure, measureFile } = require("./audio");
 const { probe, fits, ownSound, encodeAac, mux, mark, fpsText } = require("./video");
 const { analyze, RATE: ANALYSIS_RATE } = require("./analyze");
@@ -28,15 +29,19 @@ function split(interleaved) {
   return { L, R };
 }
 
+// The track's name as a folder name: its letters and digits in any script,
+// lower case and without accents, the rest as dashes, at most 60 of them.
+// A name with no letter or digit at all gets a short hash of itself, so two
+// such tracks still get folders of their own.
 function slug(file) {
-  return (
-    path
-      .basename(file)
-      .replace(/\.[^.]+$/, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "track"
-  );
+  const name = path.basename(file).replace(/\.[^.]+$/, "");
+  const plain = (text) => text.normalize("NFKD").replace(/\p{M}+/gu, "");
+  const words = plain(plain(name).toLowerCase())
+    .normalize("NFC")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!words) return `track-${crypto.createHash("sha1").update(name).digest("hex").slice(0, 6)}`;
+  return Array.from(words).slice(0, 60).join("").replace(/-+$/, "");
 }
 
 // Whether two paths name one file, however each is reached.
@@ -253,4 +258,4 @@ async function make(track, options, run, video) {
   return { cues: c, analysis: a, plan: p };
 }
 
-module.exports = { fit };
+module.exports = { fit, slug };
