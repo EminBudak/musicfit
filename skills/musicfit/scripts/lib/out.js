@@ -7,14 +7,18 @@
 // that fails, is refused or is stopped leaves the out folder as it was and
 // adds nothing to it. A run that ends well moves the earlier run's files
 // aside, moves its own in, then removes the earlier ones, so at no moment
-// are both gone; files musicfit does not write are left alone.
+// are both gone; files musicfit did not write are left alone.
 
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
-// The names musicfit writes in its folder.
+// The names musicfit writes in its folder. video.mp4, which --video adds,
+// is musicfit's only when the folder's cues.json says musicfit wrote it:
+// a video of that name is often the user's own.
 const OUTPUTS = ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"];
+const VIDEO = "video.mp4";
+const NAMES = [...OUTPUTS, VIDEO];
 // A run's hidden folder, .musicfit-part-<pid>-<8 hex digits>.
 const PART = /^\.musicfit-part-(\d+)-[0-9a-f]{8}$/;
 // A run killed outright cannot remove its hidden folder. A later run that
@@ -41,18 +45,33 @@ function writable(dir) {
   }
 }
 
+const isFile = (at) => {
+  const s = lstat(at);
+  return Boolean(s) && !s.isDirectory();
+};
+
+// Whether the video.mp4 in `dir` is one musicfit wrote: the cues.json
+// there is musicfit's and names it.
+function ownVideo(dir) {
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(dir, "cues.json"), "utf8"));
+    return Boolean(c && c.musicfit && c.video && c.video.file === VIDEO);
+  } catch {
+    return false;
+  }
+}
+
 // The earlier run's files in `dir`: the names musicfit writes that are
-// there as files or links. A folder under one of those names is not
-// musicfit's, and stays.
+// there as files or links, video.mp4 only when it is musicfit's. A folder
+// under one of those names is not musicfit's, and stays.
 function earlier(dir) {
-  return OUTPUTS.filter((name) => {
-    const s = lstat(path.join(dir, name));
-    return Boolean(s) && !s.isDirectory();
-  });
+  const own = ownVideo(dir);
+  return NAMES.filter((name) => isFile(path.join(dir, name)) && (name !== VIDEO || own));
 }
 
 // Checked before any work, for the names this run writes: the folder can be
-// written, and none of them is a folder there.
+// written, none of them is a folder there, and a video.mp4 there is one
+// musicfit wrote.
 function claim(dir, writes) {
   writable(dir);
   if (!fs.existsSync(dir)) return;
@@ -60,6 +79,7 @@ function claim(dir, writes) {
     const s = lstat(path.join(dir, name));
     if (s && s.isDirectory()) throw new Error(`${path.join(dir, name)} is a folder, and this run writes its ${name} there: move it, or give another --out`);
   }
+  if (writes.includes(VIDEO) && isFile(path.join(dir, VIDEO)) && !ownVideo(dir)) throw new Error(`${path.join(dir, VIDEO)} is not a file musicfit wrote, and this run would replace it: move it, or give another --out`);
 }
 
 // Windows can refuse a rename for a moment while a virus scanner or a sync
@@ -147,7 +167,7 @@ function moveError(state, err) {
 function commit(state) {
   const { target, work } = state;
   fs.rmSync(path.join(work, ".tmp"), { recursive: true, force: true });
-  const fresh = OUTPUTS.filter((name) => fs.existsSync(path.join(work, name)));
+  const fresh = NAMES.filter((name) => fs.existsSync(path.join(work, name)));
   if (!fs.existsSync(target)) {
     // The run made the folder: the hidden one becomes it.
     try {
@@ -182,7 +202,7 @@ function commit(state) {
   };
   try {
     aside("cues.json");
-    for (const name of OUTPUTS.filter((n) => n !== "cues.json")) {
+    for (const name of NAMES.filter((n) => n !== "cues.json")) {
       aside(name);
       into(name);
     }
@@ -296,4 +316,4 @@ function sweep(folder) {
   }
 }
 
-module.exports = { OUTPUTS, writable, claim, begin, stopAll, sweep, earlier };
+module.exports = { OUTPUTS, NAMES, writable, claim, begin, stopAll, sweep, earlier };

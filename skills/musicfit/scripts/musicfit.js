@@ -4,6 +4,8 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const { fit } = require("./lib/fit");
+const { underVideo } = require("./lib/report");
+const { probe, fpsText } = require("./lib/video");
 const { stopAll } = require("./lib/out");
 const version = require("./lib/version");
 
@@ -13,15 +15,26 @@ Fits a music track to a video cut: makes it exactly --length long by
 cutting or looping whole bars, lands its drop on --hit, ends it on a beat,
 ducks it under a voice and sets its loudness. Writes fitted.wav, cues.json
 (every beat, bar, seam and the hit, in seconds and frames), seams.png and
-FIT.md (what was done and where to listen).
+FIT.md (what was done and where to listen), and with --video the video with
+the result under it, video.mp4.
 
 Options:
   --length <time>   how long the result is, e.g. 32, 32s, 960f or 1:05
   --hit <time>      where the drop lands in the result
   --drop <time>     where the drop is in the track (default: found)
-  --fps <n>         frame rate for frame numbers, e.g. 30, 25, 29.97 (default: 30)
+  --fps <n>         frame rate for frame numbers, e.g. 30, 25, 29.97
+                    (default: the video's with --video, else 30)
   --voice <file>    a voice track on the video's timeline; the music dips under it
   --duck <dB>       how far the music dips under the voice (default: 10)
+  --video <file>    a video to lay the result under: also writes video.mp4,
+                    the video's picture as it was with this sound under it.
+                    The video has to be --length long, to a frame
+  --video-sound <how>
+                    what becomes of the video's own sound: keep (it plays with
+                    the music at its own level), voice (the music dips under
+                    it, for speech) or drop (left out, for music of its own).
+                    Without it, a video whose own sound plays nearly all the
+                    way through is refused until you choose (default: keep)
   --lufs <n>        loudness target in LUFS (default: -14)
   --end <kind>      auto, natural (the track's own ending) or fade (default: auto)
   --fade <s>        length of the closing fade, in whole beats (default: a bar)
@@ -34,11 +47,12 @@ Options:
   -h, --help        show this help
   -v, --version     show the version
 
-Times are seconds unless they end in f (frames at --fps). The track can be
-any file ffmpeg reads, a video's sound included. Needs Node 22 or newer and
-ffmpeg 4.4 or newer; set FFMPEG_PATH to pick the ffmpeg.`;
+Times are seconds unless they end in f: frames at --fps, or with --video and
+no --fps at the video's frame rate. The track can be any file ffmpeg reads,
+a video's sound included. Needs Node 22 or newer and ffmpeg 4.4 or newer;
+set FFMPEG_PATH to pick the ffmpeg.`;
 
-const VALUED = new Set(["--length", "--hit", "--drop", "--fps", "--voice", "--duck", "--lufs", "--end", "--fade", "--bpm", "--meter", "--out"]);
+const VALUED = new Set(["--length", "--hit", "--drop", "--fps", "--voice", "--duck", "--video", "--video-sound", "--lufs", "--end", "--fade", "--bpm", "--meter", "--out"]);
 
 function parseFps(value) {
   const m = /^(\d+(?:\.\d+)?)(?:\/(\d+(?:\.\d+)?))?$/.exec(value);
@@ -81,12 +95,26 @@ function parse(argv) {
   if (flags.help || flags.version) return { ...flags };
   if (rest.length !== 1) throw new Error("Give one track, for example: musicfit track.mp3 --length 30");
   const fps = raw.fps !== undefined ? parseFps(raw.fps) : 30;
-  const options = { ...flags, track: rest[0], fps, duck: 10, lufs: -14, end: "auto" };
-  if (raw.length !== undefined) options.length = parseTime("--length", raw.length, fps);
-  if (raw.hit !== undefined) options.hit = parseTime("--hit", raw.hit, fps);
-  if (raw.drop !== undefined) options.drop = parseTime("--drop", raw.drop, fps);
-  if (raw.fade !== undefined) options.fade = parseTime("--fade", raw.fade, fps);
+  // With --video and no --fps, frames count at the video's frame rate: a
+  // time given in frames waits in `frames` until main() has read it.
+  const later = raw.video !== undefined && raw.fps === undefined && !flags.analyze;
+  const options = { ...flags, track: rest[0], fps: later ? undefined : fps, duck: 10, lufs: -14, end: "auto" };
+  for (const name of ["length", "hit", "drop", "fade"]) {
+    const value = raw[name];
+    if (value === undefined) continue;
+    if (later && /^\s*\d+(?:\.\d+)?f\s*$/i.test(value)) options.frames = { ...options.frames, [name]: value };
+    else options[name] = parseTime(`--${name}`, value, fps);
+  }
   if (raw.voice !== undefined) options.voice = raw.voice;
+  if (raw["video-sound"] !== undefined) {
+    options.videoSound = raw["video-sound"].toLowerCase();
+    if (!["keep", "voice", "drop"].includes(options.videoSound)) throw new Error("--video-sound takes keep, voice or drop");
+    if (raw.video === undefined) throw new Error("--video-sound goes with --video");
+  }
+  if (raw.video !== undefined) {
+    if (flags.analyze) throw new Error("--video lays a fit under a video and --analyze only reads the track: give one of them");
+    options.video = raw.video;
+  }
   if (raw.out !== undefined) options.out = raw.out;
   if (raw.duck !== undefined) {
     options.duck = Math.abs(Number(raw.duck));
@@ -108,14 +136,30 @@ function parse(argv) {
     options.meter = Number(String(raw.meter).split("/")[0]);
     if (![2, 3, 4, 6].includes(options.meter)) throw new Error("--meter takes 3 or 4 (also 2 or 6)");
   }
+  if (!options.analyze && raw.length === undefined) throw new Error("Give --length, the length of your cut, or --analyze to only read the track");
+  if (!options.frames) check(options);
+  return options;
+}
+
+// The rules for the times, once each is known in seconds.
+function check(options) {
   if (!options.analyze) {
-    if (options.length === undefined) throw new Error("Give --length, the length of your cut, or --analyze to only read the track");
     if (!(options.length >= 1 && options.length <= 3600)) throw new Error("--length takes 1 second to an hour");
     if (options.hit !== undefined && !(options.hit >= 0 && options.hit <= options.length)) throw new Error(`--hit has to fall inside --length (0 to ${options.length} s)`);
     if (options.hit !== undefined && options.hit > options.length - 0.5) throw new Error("--hit has to leave at least half a second after it, or the drop is not heard");
   }
   if (options.fade !== undefined && !(options.fade >= 0.1 && options.fade <= 30)) throw new Error("--fade takes 0.1 to 30 seconds");
-  return options;
+}
+
+// Times given in frames with --video and no --fps, read at the video's
+// frame rate. A rate that does not hold steady gives a frame no one time.
+async function atVideoRate(options) {
+  const picture = await probe(options.video);
+  const names = Object.keys(options.frames).map((name) => `--${name}`);
+  if (!picture.constant) throw new Error(`${picture.name} has no steady frame rate, so a time in frames does not name one moment of it: give ${names.join(" and ")} in seconds, or give --fps`);
+  options.fps = Number(fpsText(picture.fps));
+  for (const [name, value] of Object.entries(options.frames)) options[name] = parseTime(`--${name}`, value, options.fps);
+  delete options.frames;
 }
 
 const sec = (t) => `${t.toFixed(2)} s`;
@@ -137,6 +181,7 @@ function summary({ dir, cues: c }) {
     lines.push(`  End     ${ending}`);
     if (c.loudness && c.loudness.integrated !== null) lines.push(`  Level   ${c.loudness.integrated} LUFS, true peak ${c.loudness.truePeak} dBTP${c.voice ? `; mix.wav ${c.loudness.mix.integrated} LUFS` : ""}`);
     else if (c.loudness) lines.push("  Level   silent");
+    if (c.video) lines.push(`  Video   video.mp4 is ${c.video.source} with ${underVideo(c)}; ${c.video.loudness.integrated} LUFS, true peak ${c.video.loudness.truePeak} dBTP`);
   }
   for (const w of c.warnings) lines.push(`  Note    ${w}`);
   lines.push("", `Read ${dir}/FIT.md for ${c.mode === "analysis" ? "the details" : "where to listen"}.`);
@@ -195,6 +240,23 @@ async function main() {
   if (options.help) return void process.stdout.write(`${USAGE}\n`);
   if (options.version) return void process.stdout.write(`${version}\n`);
   stopOnSignals(options.json);
+  const fail = (message, code) => {
+    if (options.json) process.stdout.write(JSON.stringify({ ok: false, error: message }) + "\n");
+    process.stderr.write(`musicfit: ${message}\n${code === 2 ? `\n${USAGE}\n` : ""}`);
+    process.exit(code);
+  };
+  if (options.frames) {
+    try {
+      await atVideoRate(options);
+    } catch (err) {
+      return fail(err.message, 1);
+    }
+    try {
+      check(options);
+    } catch (err) {
+      return fail(err.message, 2);
+    }
+  }
   try {
     const result = await fit(options.track, { ...options, log: options.json ? () => {} : (line) => process.stderr.write(`${line}\n`) });
     process.stdout.write(options.json ? JSON.stringify(result.cues, null, 2) + "\n" : summary(result) + "\n");
@@ -204,12 +266,10 @@ async function main() {
     // that signal a moment to come. A stopped run has said so and ends by it.
     if (err.stderr !== undefined) await new Promise((resolve) => setTimeout(resolve, 200));
     if (stopping) return;
-    if (options.json) process.stdout.write(JSON.stringify({ ok: false, error: err.message }) + "\n");
-    process.stderr.write(`musicfit: ${err.message}\n`);
-    process.exit(1);
+    fail(err.message, 1);
   }
 }
 
 if (require.main === module) main();
 
-module.exports = { parse, parseTime, parseFps, summary };
+module.exports = { parse, check, parseTime, parseFps, summary };

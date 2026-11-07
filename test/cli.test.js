@@ -76,6 +76,26 @@ test("times in seconds, frames and minutes, and frame rates as decimals or fract
   assert.equal(parse(["song.mp3", "--analyze"]).analyze, true);
 });
 
+test("--video and --video-sound: what they take, what they refuse, and frames that wait for the video's rate", () => {
+  const options = parse(["song.mp3", "--length", "12", "--video", "film.mp4", "--video-sound", "Drop"]);
+  assert.equal(options.video, "film.mp4");
+  assert.equal(options.videoSound, "drop");
+  assert.equal(options.fps, undefined);
+  assert.equal(parse(["song.mp3", "--length", "12", "--video", "film.mp4"]).videoSound, undefined);
+  const later = parse(["song.mp3", "--length", "300f", "--hit", "8", "--video", "film.mp4"]);
+  assert.deepEqual(later.frames, { length: "300f" });
+  assert.equal(later.hit, 8);
+  assert.equal(parse(["song.mp3", "--length", "300f", "--fps", "25", "--video", "film.mp4"]).length, 12);
+  assert.throws(() => parse(["song.mp3", "--length", "12", "--video", "film.mp4", "--video-sound", "loud"]), /--video-sound takes keep, voice or drop/);
+  assert.throws(() => parse(["song.mp3", "--length", "12", "--video-sound", "drop"]), /--video-sound goes with --video/);
+  assert.throws(() => parse(["song.mp3", "--analyze", "--video", "film.mp4"]), /--video lays a fit under a video and --analyze only reads the track: give one of them/);
+  const refused = spawnSync(process.execPath, [CLI, "song.mp3", "--length", "12", "--video-sound", "keep"], { encoding: "utf8" });
+  assert.equal(refused.status, 2);
+  const help = spawnSync(process.execPath, [CLI, "--help"], { encoding: "utf8" }).stdout;
+  assert.match(help, /\n {2}--video <file> {4}a video to lay the result under: also writes video\.mp4,/);
+  assert.match(help, /\n {2}--video-sound <how>\n {20}what becomes of the video's own sound: keep/);
+});
+
 test("without ffmpeg it says how to get it", () => {
   const { file } = fixture("house");
   const run = spawnSync(process.execPath, [CLI, file, "--length", "10"], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: "/nonexistent/ffmpeg" } });

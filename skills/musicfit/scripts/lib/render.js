@@ -281,28 +281,42 @@ function outputBeats(segs, a, total) {
 
 // ─── the voice ─────────────────────────────────────────────────────────────
 
+// The level of each 10 ms of a sound, in dB.
+function levels(audio) {
+  const hop = RATE / 100;
+  const n = Math.floor(audio.L.length / hop);
+  const out = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    let sum = 0;
+    for (let i = k * hop; i < (k + 1) * hop; i++) sum += ((audio.L[i] + audio.R[i]) / 2) ** 2;
+    out[k] = 10 * Math.log10(sum / hop + 1e-12);
+  }
+  return out;
+}
+
+// How loud a sound is at its quietest: its quietest tenth, in dB. A room
+// tone sits far down; a music bed or a tone that never stops does not.
+function floorOf(audio) {
+  const sorted = levels(audio).sort();
+  return sorted.length ? sorted[Math.floor(sorted.length * 0.1)] : -Infinity;
+}
+
 // Where the voice speaks: frames of 10 ms more than 20 dB below its loudest
 // count as quiet, and so does anything within 10 dB of the room tone (the
 // quietest tenth), so a few words over a long hiss are found too. Pauses
 // under 0.6 s are bridged, blips under 0.12 s dropped. Returns [from, to]
 // spans in seconds.
 function speech(voice) {
-  const hop = RATE / 100;
-  const n = Math.floor(voice.L.length / hop);
-  const levels = new Float64Array(n);
-  for (let k = 0; k < n; k++) {
-    let sum = 0;
-    for (let i = k * hop; i < (k + 1) * hop; i++) sum += ((voice.L[i] + voice.R[i]) / 2) ** 2;
-    levels[k] = 10 * Math.log10(sum / hop + 1e-12);
-  }
-  const sorted = Float64Array.from(levels).sort();
+  const level = levels(voice);
+  const n = level.length;
+  const sorted = Float64Array.from(level).sort();
   const loud = sorted[Math.floor(sorted.length * 0.995)];
   const room = sorted[Math.floor(sorted.length * 0.1)];
   const threshold = Math.max(-55, loud - 20, room + 10);
   const spans = [];
   let open = -1;
   for (let k = 0; k <= n; k++) {
-    const on = k < n && levels[k] > threshold;
+    const on = k < n && level[k] > threshold;
     if (on && open < 0) open = k;
     if (!on && open >= 0) {
       spans.push([open / 100, k / 100]);
@@ -470,4 +484,4 @@ async function normalize(audio, { lufs, peak = -1 }) {
   return { before, after, gain, limited: true };
 }
 
-module.exports = { assemble, speech, duck, normalize, interleave, attackNear };
+module.exports = { assemble, speech, floorOf, duck, normalize, interleave, scale, attackNear };

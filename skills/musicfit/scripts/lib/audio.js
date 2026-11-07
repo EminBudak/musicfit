@@ -116,10 +116,13 @@ function floats(chunks) {
 }
 
 // The first audio stream of any file ffmpeg reads (a video's too), as
-// interleaved floats at the given rate and channel count.
-async function decode(file, { rate = RATE, channels = 2 } = {}) {
+// interleaved floats at the given rate and channel count. With `timeline`
+// it is read on the file's timeline, for a video's own sound: silence
+// where the sound starts after the picture or has a gap, so a second into
+// the sound is a second into the picture.
+async function decode(file, { rate = RATE, channels = 2, timeline = false } = {}) {
   try {
-    const { chunks } = await run(["-v", "error", "-i", file, "-map", "0:a:0", "-vn", "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
+    const { chunks } = await run(["-v", "error", "-i", file, "-map", "0:a:0", "-vn", ...(timeline ? ["-af", "aresample=async=1:first_pts=0"] : []), "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
     const samples = floats(chunks);
     if (!samples.length) throw new Error(`${file} has no audio`);
     return samples;
@@ -164,4 +167,10 @@ async function measure(samples, { rate = RATE, channels = 2 } = {}) {
   return summary(stderr);
 }
 
-module.exports = { RATE, decode, encodeWav, measure, run, reason, stopChildren };
+// The same for the first sound of a file, as a player decodes it.
+async function measureFile(file) {
+  const { stderr } = await run(["-v", "info", "-nostats", "-i", file, "-map", "0:a:0", "-af", METER, "-f", "null", "-"]);
+  return summary(stderr);
+}
+
+module.exports = { RATE, decode, encodeWav, measure, measureFile, run, reason, stopChildren };

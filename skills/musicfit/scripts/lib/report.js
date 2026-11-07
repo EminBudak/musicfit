@@ -21,7 +21,7 @@ function grid(frame, { beats, bars, hits }) {
 }
 
 // What the fitted file holds, on its own timeline.
-function cues({ version, track, analysis: a, plan: p, result: r, options, loudness, voice }) {
+function cues({ version, track, analysis: a, plan: p, result: r, options, loudness, voice, video = null }) {
   const frame = framer(options.fps);
   const length = options.length;
   const downbeats = r.beats.filter((b) => b.downbeat).map((b) => b.time);
@@ -107,6 +107,27 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
     segments,
     seams,
     voice: voice ? { file: voice.file, duck: voice.duck, spans: voice.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })) } : null,
+    // With --video: video.mp4, the video's picture with this sound under
+    // it. sound is what became of the video's own sound: keep (it plays
+    // with the music), voice (the music dips under it), drop (left out) or
+    // none (it had none); same says when it was the track or the voice,
+    // which play in its place, and spans where it plays.
+    video: video
+      ? {
+          file: "video.mp4",
+          source: video.name,
+          length: r3(video.seconds),
+          fps: Math.round(video.fps * 1000) / 1000,
+          frames: video.frames,
+          steady: video.constant,
+          picture: video.picture,
+          sound: video.sound,
+          same: video.same,
+          duck: video.sound === "voice" ? video.duck : null,
+          spans: video.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })),
+          loudness: { target: options.lufs, integrated: round1(video.loudness.integrated), truePeak: round1(video.loudness.truePeak) },
+        }
+      : null,
     loudness: loudness
       ? { target: options.lufs, integrated: round1(loudness.after.integrated), truePeak: round1(loudness.after.truePeak), range: round1(loudness.after.range), limited: loudness.limited, mix: voice && voice.loudness ? { integrated: round1(voice.loudness.after.integrated), truePeak: round1(voice.loudness.after.truePeak) } : null }
       : null,
@@ -197,6 +218,12 @@ function fitMarkdown(c, { trackName }) {
   lines.push(`# ${trackName} fitted to ${sec(c.length)}`, "");
   const level = c.loudness && c.loudness.integrated !== null ? `, at ${c.loudness.integrated} LUFS${c.voice ? " as a whole" : ""} with true peaks at ${c.loudness.truePeak} dBTP` : c.loudness ? ", silent" : "";
   lines.push(`\`fitted.wav\` is ${sec(c.length)} long (${c.frames} frames at ${c.fps} fps), 48 kHz stereo${level}.${c.mix ? " `mix.wav` is the same music with the voice over it, the whole at the target loudness." : ""}`, "");
+  if (c.video) {
+    const v = c.video;
+    const level = v.loudness.integrated !== null ? `, the whole at ${v.loudness.integrated} LUFS with true peaks at ${v.loudness.truePeak} dBTP after the AAC encoding` : "";
+    const frames = v.steady ? `${v.frames} frames at ${v.fps} fps` : `${v.frames} frames, ${v.fps} fps on average`;
+    lines.push(`\`video.mp4\` is ${v.source} with ${underVideo(c)}: its picture as it was (${v.picture}, ${frames}, ${sec(v.length)})${level}.`, "");
+  }
   if (c.tempo) {
     const meter = c.tempo.meter === 3 ? "three beats to a bar" : `${c.tempo.meter} beats to a bar`;
     const how = c.mode === "phrases" ? " Cuts are made in pairs of bars, because the tempo might be half of that." : "";
@@ -228,13 +255,22 @@ function fitMarkdown(c, { trackName }) {
     const bars = s.sourceBars ? (s.sourceBars[0] === s.sourceBars[1] ? `bar ${s.sourceBars[0]}` : `bars ${s.sourceBars[0]} to ${s.sourceBars[1]}`) : "a stretch";
     lines.push(`${i + 1}. ${sec(s.from)} to ${sec(s.to)} plays ${bars} of the track (${sec(s.source[0])} to ${sec(s.source[1])} there).`);
   });
-  if (c.voice) lines.push(`${c.segments.length + 1}. The music dips ${c.voice.duck} dB wherever the voice speaks (${c.voice.spans.length} ${c.voice.spans.length === 1 ? "stretch" : "stretches"}), starting 0.15 s before it and coming back over 0.5 s after.`);
+  const dips = c.video && c.video.sound === "voice";
+  if (c.voice || dips) {
+    const under = c.voice && dips ? `the voice speaks or ${c.video.source}'s own sound plays` : c.voice ? "the voice speaks" : `${c.video.source}'s own sound plays`;
+    const count = (c.voice ? c.voice.spans.length : 0) + (dips ? c.video.spans.length : 0);
+    lines.push(`${c.segments.length + 1}. The music dips ${c.voice ? c.voice.duck : c.video.duck} dB wherever ${under} (${count} ${count === 1 ? "stretch" : "stretches"}), starting 0.15 s before it and coming back over 0.5 s after.`);
+  }
   if (c.loudness && c.loudness.integrated !== null) {
-    const step = c.segments.length + (c.voice ? 2 : 1);
+    const step = c.segments.length + (c.voice || dips ? 2 : 1);
     const short = !c.voice && c.loudness.integrated < c.loudness.target - 0.5;
     const how = c.loudness.limited ? `, with a limiter holding the true peaks at ${c.loudness.truePeak} dBTP` : " with one gain change";
     if (short) lines.push(`${step}. Loudness raised toward ${c.loudness.target} LUFS but stopped at ${c.loudness.integrated} LUFS${how}: any louder and the peaks would pass -1 dBTP.`);
     else lines.push(`${step}. Loudness set to ${c.loudness.target} LUFS${c.voice ? " where nobody speaks" : ""}${how}.`);
+  }
+  if (c.video) {
+    const step = c.segments.length + (c.voice || dips ? 1 : 0) + (c.loudness && c.loudness.integrated !== null ? 1 : 0) + 1;
+    lines.push(`${step}. ${c.video.source}'s picture copied packet for packet into \`video.mp4\`, with ${underVideo(c)} under it, the whole set to ${c.video.loudness.target} LUFS, measured after the AAC encoding.`);
   }
   lines.push("");
 
@@ -245,8 +281,21 @@ function fitMarkdown(c, { trackName }) {
   }
 
   lines.push("## Using it", "");
+  if (c.video) lines.push(`\`video.mp4\` is ${c.video.source} with this sound under it, to watch and hand over as it is.`, "");
   lines.push(`\`cues.json\` has every beat and bar of \`fitted.wav\` as a frame at ${c.fps} fps (\`beats\`, \`bars\`), the frames of the hits (\`hits\`), the same in seconds under \`times\`, and the seams and the fade, for cutting the video on the music.`);
   return lines.join("\n") + "\n";
+}
+
+// What plays under the picture in video.mp4, said of the video.
+function underVideo(c) {
+  const v = c.video;
+  const voice = c.voice ? " and the voice" : "";
+  if (v.same === "voice") return "the music and the voice, which is its own sound, laid in once";
+  if (v.same === "track") return "the music fitted from its own sound, in place of that sound";
+  if (v.sound === "keep") return `the music${voice} and its own sound at its own level`;
+  if (v.sound === "voice") return `its own sound${voice} and the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
+  if (v.sound === "drop") return `the music${voice} in place of its own sound`;
+  return `the music${voice} (it had no sound of its own)`;
 }
 
 function startText(c) {
@@ -287,4 +336,4 @@ function analysisMarkdown(c, { trackName }) {
   return lines.join("\n") + "\n";
 }
 
-module.exports = { cues, analysisCues, fitMarkdown, analysisMarkdown };
+module.exports = { cues, analysisCues, fitMarkdown, analysisMarkdown, underVideo };
