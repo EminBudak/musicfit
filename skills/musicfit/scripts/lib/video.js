@@ -21,9 +21,10 @@ const RATES = [24000 / 1001, 24, 25, 30000 / 1001, 30, 48000 / 1001, 48, 50, 600
 const nominal = (fps) => RATES.find((rate) => Math.abs(fps - rate) < rate * 0.001) || fps;
 
 // The comment musicfit writes in video.mp4, so a video it made is known
-// when it is given back as --video.
-const mark = (version, track, source) => `musicfit ${version}: ${track} laid under ${source}`;
-const MARK = /^musicfit \S+: (.+) laid under (.+)$/;
+// when it is given back as --video. It names no file: the video goes out
+// to people, and the names of the files it was made from are the user's.
+const mark = (version) => `musicfit ${version}: a fitted track laid under this picture`;
+const MARK = /^musicfit \S+: a fitted track laid under this picture$/;
 
 // What ffmpeg prints while it reads a file that is cut short or has a
 // broken packet: a packet cut off at the end, an MP4's samples past the end
@@ -41,11 +42,11 @@ function inputSection(said) {
 
 // The video's picture as its packets give it: how long it is, its frames,
 // its frame rate and whether that holds steady, the codec of its picture
-// and of its sound, and the mark of musicfit when musicfit made it. One
-// frame is copied into an MP4 too, into a pipe, to see that an MP4 holds
-// the picture as it is. Refused with the reason when the video cannot be
-// read, is cut short or damaged, has no picture or a still one, or holds a
-// picture an MP4 cannot take without encoding it again.
+// and of its sound, and whether musicfit made it. One frame is copied into
+// an MP4 too, into a pipe, to see that an MP4 holds the picture as it is.
+// Refused with the reason when the video cannot be read, is cut short or
+// damaged, has no picture or a still one, or holds a picture an MP4 cannot
+// take without encoding it again.
 async function probe(file) {
   const name = path.basename(file);
   const size = (fs.statSync(file, { throwIfNoEntry: false }) || {}).size;
@@ -75,7 +76,6 @@ async function probe(file) {
   // The file's own tags come before its duration; the streams' after.
   const head = input.slice(0, Math.max(0, input.search(/^\s*Duration:/m)));
   const comment = (/^\s*comment\s*:\s?(.*)$/im.exec(head) || [])[1] || "";
-  const made = MARK.exec(comment.trim());
 
   // framecrc lists each packet as: stream, dts, pts, duration, size, crc.
   const tb = /^#tb 0: (\d+)\/(\d+)/m.exec(crc);
@@ -135,7 +135,7 @@ async function probe(file) {
     constant,
     picture: (/: Video: (\w+)/.exec(pictureLine) || [])[1] || "unknown",
     sound: soundLine ? (/: Audio: (\w+)/.exec(soundLine) || [])[1] || "unknown" : null,
-    made: made ? { track: made[1], source: made[2] } : null,
+    made: MARK.test(comment.trim()),
   };
 }
 

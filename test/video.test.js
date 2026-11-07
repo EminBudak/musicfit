@@ -147,7 +147,8 @@ test("--video writes video.mp4: the picture packet for packet, the fitted track 
   const level = await measureFile(path.join(out, "video.mp4"));
   assert.ok(Math.abs(level.integrated + 14) <= 0.5, `${level.integrated} LUFS`);
   assert.ok(level.truePeak <= -1, `true peak ${level.truePeak} dBTP`);
-  assert.match(said(path.join(out, "video.mp4")), /comment\s*: musicfit \S+: house\.wav laid under film25\.mp4/);
+  // The mark names no file: the track's and the video's names stay the user's.
+  assert.match(said(path.join(out, "video.mp4")), /comment\s*: musicfit \S+: a fitted track laid under this picture\n/);
 
   // With keep the music does not dip at all: fitted.wav is a plain fit's,
   // and in video.mp4 the bar after the hit, where an effect plays on the
@@ -283,13 +284,22 @@ test("a video that cannot take the fit is refused before any work, and no folder
   assert.deepEqual(fs.readdirSync(dir).filter((e) => e.startsWith(".musicfit-")), []);
 });
 
-test("a video musicfit made is refused as --video, naming the video it was made from", () => {
+test("a video musicfit made is refused as --video while its sound would be laid in, and taken with --video-sound drop", () => {
   const out = at("remade");
-  const first = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", film("film25", { sound: effects() }), "--out", out]);
+  const source = film("film25", { sound: effects() });
+  const first = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", source, "--video-sound", "keep", "--out", out]);
   assert.equal(first.status, 0, first.stderr);
-  const again = cli([fixture("house").file, "--length", "12", "--hit", "6", "--video", path.join(out, "video.mp4"), "--out", at("remade-again")]);
-  assert.equal(again.status, 1);
-  assert.match(again.stderr, /musicfit: video\.mp4 is a video musicfit made, house\.wav laid under film25\.mp4: give --video film25\.mp4, the video it was made from\n$/);
+  // A copy of it graded or trimmed elsewhere keeps the mark.
+  const graded = at("graded.mp4");
+  ffmpeg(["-i", path.join(out, "video.mp4"), "-c", "copy", graded]);
+  for (const how of [[], ["--video-sound", "keep"], ["--video-sound", "voice"]]) {
+    const again = cli([fixture("house").file, "--length", "12", "--hit", "6", "--video", graded, ...how, "--out", at("remade-again")]);
+    assert.equal(again.status, 1, `${how}: ${again.stderr}`);
+    assert.match(again.stderr, /musicfit: graded\.mp4 is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from, or --video-sound drop to leave that sound out\n$/);
+  }
+  const dropped = cli([fixture("house").file, "--length", "12", "--hit", "6", "--video", graded, "--video-sound", "drop", "--out", at("remade-drop")]);
+  assert.equal(dropped.status, 0, dropped.stderr);
+  assert.deepEqual(packets(path.join(at("remade-drop"), "video.mp4")), packets(source));
 });
 
 test("a video.mp4 musicfit did not write is refused, a run without --video leaves it alone, and one musicfit wrote goes with the next run", () => {

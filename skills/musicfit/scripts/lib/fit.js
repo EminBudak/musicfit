@@ -80,16 +80,15 @@ async function fit(track, options) {
 // --video-sound says what to do with it.
 async function readVideo(track, o) {
   const picture = await probe(o.video);
-  if (picture.made) throw new Error(`${picture.name} is a video musicfit made, ${picture.made.track} laid under ${picture.made.source}: give --video ${picture.made.source}, the video it was made from`);
   const adopted = o.fps === undefined;
   if (adopted) o.fps = Number(picture.fps.toFixed(3));
   fits(picture, o.length, o.fps);
   if (adopted && !picture.constant) o.warnings.push(`${picture.name} has no steady frame rate, so the frames in cues.json count at its average, ${fpsText(o.fps)} fps.`);
   if (!adopted && Math.abs(picture.fps - o.fps) > picture.fps * 0.0005) o.warnings.push(`${picture.name} runs at ${fpsText(picture.fps)} fps and --fps is ${fpsText(o.fps)}, so the frames in cues.json are not the video's: leave --fps out, or give --fps ${fpsText(picture.fps)}, to count them as the video does.`);
 
-  // The same sound is never laid in twice: when the video's own sound is
-  // the track, or the voice, it is left out and the track or the voice
-  // plays in its place.
+  // The same sound is never laid in twice: when the video itself is given
+  // as the track, or as the voice, its own sound is left out and the track
+  // or the voice plays in its place.
   let sound = picture.sound ? o.videoSound : "none";
   let same = null;
   if (picture.sound && sameFile(track, o.video)) same = "track";
@@ -98,6 +97,9 @@ async function readVideo(track, o) {
     sound = "drop";
     o.warnings.push(same === "track" ? `${picture.name}'s own sound is the track, so it is not laid in a second time.` : `${picture.name}'s own sound is the voice given with --voice, so it is laid in once, as the voice.`);
   }
+  // A video musicfit made has a fitted track in its sound already, which
+  // would play under the new one.
+  if (picture.made && sound !== "drop" && sound !== "none") throw new Error(`${picture.name} is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from, or --video-sound drop to leave that sound out`);
   const video = { picture, sound, same, own: null, spans: [] };
   if (sound === "drop" || sound === "none") return video;
   o.log && o.log(`Reading ${picture.name}'s own sound`);
@@ -233,7 +235,7 @@ async function make(track, options, run, video) {
     await normalize(under, { lufs: options.lufs });
     const m4a = run.scratch("sound.m4a");
     const level = await aac(under, m4a, options.lufs);
-    await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version, trackName, picture.name) });
+    await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version) });
     laid = { ...picture, sound: video.sound, same: video.same, duck: options.duck, spans: video.spans, loudness: level };
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
   }
