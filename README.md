@@ -28,7 +28,7 @@ musicfit-track/
 - The drop lands on `--hit` to the sample, on the start of its attack. Nothing that comes after the drop in the track plays before it, so it is heard first where you asked.
 - The track starts the way it starts, with its own pickup, and ends on its own last hit when it has one and there is room. Otherwise it ends with a fade that starts on a beat and ends on one.
 - `--voice` lowers the music 10 dB (`--duck`) wherever the voice speaks, starting 0.15 s before each phrase and coming back 0.5 s after.
-- `--video` lays the result under a video in `video.mp4`: the video's picture copied packet for packet, never encoded again, and the sound encoded as AAC at the loudness target, measured as a player decodes it and limited again until its true peak is under -1 dBTP (FIT.md says so when four tries were not enough). The video's own sound plays with the music at its own level (`--video-sound keep`, the default, for sound effects), has the music dip under it as under a voice (`voice`, for speech) or is left out (`drop`, for music of its own). When that sound plays nearly all the way through and `--video-sound` is not given, the run is refused before the track is read, with a message that asks which. When the video's sound is the track itself, or the voice given with `--voice`, it is laid in once. The video has to be `--length` long to a frame, and without `--fps` the frames count at its frame rate. A video that cannot be read, has no picture, holds a picture an MP4 cannot take without encoding it again, or is another length is refused before any work.
+- `--video` lays the result under a video in `video.mp4`: the video's picture copied packet for packet, never encoded again, and the sound encoded as AAC at the loudness target, measured as a player decodes it and limited again until its true peak is under -1 dBTP (FIT.md says so when four tries were not enough). `--video-sound` says what becomes of the video's own sound. `keep`, for sound effects, leaves it at its own level and dips the music half of `--duck` (5 dB) wherever it plays, so the effects stay clear over the track. `voice`, for speech, sets it to the loudness target and dips the music `--duck` (10 dB) under it, as under `--voice`. `drop`, for music of its own, leaves it out. musicfit cannot tell speech from effects or from music, so a video with more than a faint room tone of its own is refused before the track is read until `--video-sound` is given; a video whose own sound is silent or a faint room tone keeps it as it is. When the video itself is given as the track or as `--voice` (the same file), its sound is laid in once. A voice the video already holds goes with `--video-sound voice`, not as a copy given to `--voice`, which would lay it in twice. The video has to be `--length` long to a frame, and without `--fps` the frames count at its frame rate. A video that cannot be read, is cut short or damaged, has no picture, holds a picture an MP4 cannot take without encoding it again, or is another length is refused before any work, and so is a video musicfit made, unless `drop` leaves out its sound and the fitted track in it. `video.mp4` carries a comment that says musicfit made it; it names no file.
 - Loudness is measured with ffmpeg's EBU R128 meter and set with one gain; a true-peak limiter holds the peaks under -1 dBTP only when that gain would push them over.
 - `cues.json` lists `beats`, `bars` and `hits` (the drop and the track's own last hit) as frame numbers at `--fps`, ready for a Remotion `<Sequence from={cues.bars[8]}>`, and the same moments in seconds under `times`. The seams, sections, fade and loudness are in it too:
 
@@ -50,7 +50,7 @@ The lists are cut short here; the file has every beat and bar.
 
 `--analyze` reads a track without fitting it and saves its `cues.json`, `seams.png` and `FIT.md` in `musicfit-analysis-track/` by default, so reading a track does not replace its fit unless both are given the same `--out`.
 
-A run makes its files in a hidden folder whose name starts with `.musicfit-part-`, inside the out folder (or next to it when the run makes the out folder), and puts them in place only once it has ended well. A run that fails, is refused or is stopped with Ctrl-C or a signal leaves the out folder as it was: the earlier run's files stay and nothing is added. A run that ends well replaces the earlier run's files and removes those it did not make again, like `mix.wav` after a fit with no voice; files musicfit did not write are left alone, a `video.mp4` too unless the folder's `cues.json` names it. When a file is held open by another program and cannot be moved, the run says so and puts the earlier files back; any it cannot put back wait in a folder the message names. A run killed outright (`kill -9`, or the system when memory runs out) cannot tidy up: its hidden folder stays, and if it was killed in the moment it moved its files in, some of the earlier files can be in there. A later run that ends well in the same place removes that folder once the killed run's process is gone and nothing in the folder has changed for 15 minutes.
+A run makes its files in a hidden folder whose name starts with `.musicfit-part-`, inside the out folder (or next to it when the run makes the out folder), and puts them in place only once it has ended well. Nothing is made before the run writes its first file, after the track is read. A run that fails, is refused or is stopped with Ctrl-C or a signal leaves the out folder as it was: the earlier run's files stay and nothing is added. A run that ends well replaces the files the earlier run's `cues.json` lists and removes those it did not make again, like `mix.wav` after a fit with no voice. A file under one of musicfit's names (`fitted.wav`, `mix.wav`, `video.mp4`, `cues.json`, `seams.png`, `FIT.md`) that no musicfit `cues.json` there lists is not musicfit's: a run that would write over it is refused before any work, and one that would not leaves it alone, as it leaves files under other names. A run whose track, voice or video is one of the files it would replace or remove is refused before any work too. Two runs that end at the same moment in one folder take turns, and the later one's files are what is left. When a file is held open by another program and cannot be moved, the run says so and puts the earlier files back; any it cannot put back wait in a folder the message names. A run killed outright (`kill -9`, or the system when memory runs out) after it began writing cannot tidy up: its hidden folder stays, and if it was killed in the moment it moved its files in, some of the earlier files can be in there, and a `.musicfit-commit` file stays in the out folder. A later run that ends well in the same place removes that folder once the killed run's process is gone and nothing in the folder has changed for 15 minutes, and takes the `.musicfit-commit` file away when it puts its own files in.
 
 ## Use it with your agent
 
@@ -96,11 +96,12 @@ npx musicfit@latest <track> --length <time> [options]
                     the video's picture as it was with this sound under it.
                     The video has to be --length long, to a frame
   --video-sound <how>
-                    what becomes of the video's own sound: keep (it plays with
-                    the music at its own level), voice (the music dips under
-                    it, for speech) or drop (left out, for music of its own).
-                    Without it, a video whose own sound plays nearly all the
-                    way through is refused until you choose (default: keep)
+                    what becomes of the video's own sound: keep (sound
+                    effects: they stay at their level and the music dips
+                    half of --duck under them), voice (speech: set to --lufs,
+                    the music dips --duck under it) or drop (music of its
+                    own: left out). Without it, a video with more than a
+                    faint room tone of its own is refused until you choose
   --lufs <n>        loudness target in LUFS (default: -14)
   --end <kind>      auto, natural (the track's own ending) or fade (default: auto)
   --fade <s>        length of the closing fade, in whole beats (default: a bar)
@@ -120,7 +121,7 @@ Some runs:
 npx musicfit@latest track.mp3 --length 15
 npx musicfit@latest track.mp3 --length 900f --hit 450f --fps 30 --out public/music
 npx musicfit@latest track.mp3 --length 1:30 --hit 41 --voice vo.wav --lufs -16
-npx musicfit@latest track.mp3 --length 733f --hit 600f --video film.mp4
+npx musicfit@latest track.mp3 --length 733f --hit 600f --video film.mp4 --video-sound keep
 npx musicfit@latest track.mp3 --length 32 --video talk.mp4 --video-sound voice
 npx musicfit@latest track.mp3 --analyze
 ```
@@ -150,7 +151,7 @@ It needs Node 22 or newer and ffmpeg 4.4 or newer (`brew install ffmpeg`, `sudo 
 - Seams follow bars and sound, not words: in a song with singing a cut can fall in the middle of a line. An instrumental fits best.
 - Lengthening loops bars the track already has, so a 30 second track stretched to 3 minutes repeats, and so does the intro when the drop is asked for much later than the track has it (musicfit says how many times). Ask the music model for a little more than you need.
 - `--video` copies the picture as it is, so a picture an MP4 cannot hold that way (ProRes, DNxHD, VP8) is refused rather than encoded again. Only the picture and the new sound go into `video.mp4`: subtitles and other streams of the video are left out.
-- musicfit cannot tell speech from sound effects or from music. The music dips under the video's own sound only with `--video-sound voice`, and that dips it under anything loud enough, effects included.
+- musicfit cannot tell speech from sound effects or from music, which is why it asks for `--video-sound` when a video has sound of its own. With `keep` and `voice` the music dips under anything in that sound that stands out, a cough or a door as much as a word.
 - It does not change the tempo or the pitch, and it does not check whether you may use the track.
 
 ## See also
