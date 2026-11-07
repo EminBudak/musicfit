@@ -434,6 +434,53 @@ test("a process that exits with a run not ended takes its hidden folder with it"
   assert.ok(!fs.existsSync(path.join(dir, "exits")), `left: ${fs.existsSync(path.join(dir, "exits")) ? JSON.stringify(snapshot(path.join(dir, "exits"))) : ""}`);
 });
 
+test("a file under one of musicfit's names that no musicfit cues.json there lists stops the run before any work, and files under other names stay", () => {
+  const { file } = fixture("house");
+  const folder = outDir("their-files");
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, "cues.json"), JSON.stringify({ mine: "cue sheet from my editor" }));
+  fs.writeFileSync(path.join(folder, "FIT.md"), "my own notes\n");
+  const both = cli([file, "--length", "12", "--out", folder]);
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, new RegExp(`musicfit: ${quote(folder)} holds cues\\.json and FIT\\.md, which musicfit did not write, and this run would replace them: move them, or give another --out\n`));
+  assert.doesNotMatch(both.stderr, /Reading/);
+  fs.rmSync(path.join(folder, "cues.json"));
+  const one = cli([file, "--length", "12", "--out", folder]);
+  assert.equal(one.status, 1);
+  assert.match(one.stderr, new RegExp(`musicfit: ${quote(path.join(folder, "FIT.md"))} is not a file musicfit wrote, and this run would replace it: move it, or give another --out\n`));
+  assert.equal(fs.readFileSync(path.join(folder, "FIT.md"), "utf8"), "my own notes\n");
+  // A mix.wav of the user's, which a run without a voice does not write, stays.
+  fs.rmSync(path.join(folder, "FIT.md"));
+  fs.writeFileSync(path.join(folder, "mix.wav"), "my mix\n");
+  const fits = cli([file, "--length", "12", "--out", folder]);
+  assert.equal(fits.status, 0, fits.stderr);
+  const again = cli([file, "--length", "12", "--out", folder]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(fs.readFileSync(path.join(folder, "mix.wav"), "utf8"), "my mix\n");
+});
+
+test("an input that is a file the run replaces or removes once it ends well is refused before any work", () => {
+  const { file } = fixture("house");
+  const folder = goodFit("inputs-inside");
+  const copy = path.join(dir, "inputs-inside-track.wav");
+  fs.copyFileSync(file, copy);
+  const cases = [
+    [[path.join(folder, "fitted.wav"), "--length", "10", "--out", folder], /fitted\.wav is the fitted\.wav in .*, which this run replaces once it ends well: copy it somewhere else first, or give another --out/],
+    [[copy, "--length", "10", "--voice", path.join(folder, "mix.wav"), "--out", folder], /mix\.wav is the mix\.wav in .*, which this run replaces once it ends well/],
+    [[copy, "--length", "10", "--hit", "5", "--out", folder, "--voice", path.join(folder, "fitted.wav")], /fitted\.wav is the fitted\.wav in .*, which this run replaces once it ends well/],
+    // Without --voice a run removes the earlier mix.wav.
+    [[path.join(folder, "mix.wav"), "--length", "10", "--out", folder], /mix\.wav is the mix\.wav in .*, which this run removes once it ends well/],
+  ];
+  const before = snapshot(folder);
+  for (const [args, message] of cases) {
+    const run = cli(args);
+    assert.equal(run.status, 1, `${args.join(" ")}: ${run.stderr}`);
+    assert.match(run.stderr, message);
+    assert.doesNotMatch(run.stderr, /Reading/);
+  }
+  assert.deepEqual(snapshot(folder), before);
+});
+
 test("a track named in any script gets a folder of its own, and one with no letters a short hash", () => {
   const { slug } = require("../skills/musicfit/scripts/lib/fit");
   assert.equal(slug("песня один.wav"), "песня-один");

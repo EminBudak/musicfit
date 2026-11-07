@@ -16,7 +16,7 @@ const { plan } = require("./plan");
 const { assemble, speech, floorOf, duck, normalize, interleave, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
-const { claim, begin } = require("./out");
+const { claim, begin, sameFile } = require("./out");
 const version = require("./version");
 
 function split(interleaved) {
@@ -45,19 +45,6 @@ function slug(file) {
   return Array.from(words).slice(0, 60).join("").replace(/-+$/, "");
 }
 
-// Whether two paths name one file, however each is reached.
-function sameFile(a, b) {
-  try {
-    const x = fs.statSync(a, { bigint: true });
-    const y = fs.statSync(b, { bigint: true });
-    // A disk that keeps no file numbers gives 0; the real paths stand in.
-    if (!x.ino || !y.ino) return fs.realpathSync.native(a) === fs.realpathSync.native(b);
-    return x.dev === y.dev && x.ino === y.ino;
-  } catch {
-    return false;
-  }
-}
-
 const seconds = (spans) => spans.reduce((sum, [from, to]) => sum + (to - from), 0);
 
 // options: { length, hit, drop, fps, voice, duck, video, videoSound, lufs,
@@ -68,7 +55,8 @@ async function fit(track, options) {
   const dir = options.out || (options.analyze ? `musicfit-analysis-${slug(track)}` : `musicfit-${slug(track)}`);
   if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
   if (options.video && !fs.existsSync(options.video)) throw new Error(`Cannot read ${options.video}: no such file`);
-  claim(dir, options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), ...(options.video ? ["video.mp4"] : []), "cues.json", "seams.png", "FIT.md"]);
+  const writes = options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), ...(options.video ? ["video.mp4"] : []), "cues.json", "seams.png", "FIT.md"];
+  claim(dir, writes, [track, options.voice, options.video]);
   const run = begin(dir);
   try {
     const o = { ...options, warnings: [...(options.warnings || [])] };
