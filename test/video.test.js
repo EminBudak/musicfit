@@ -250,6 +250,17 @@ test("a video that cannot take the fit is refused before any work, and no folder
   const text = at("notes.txt");
   fs.writeFileSync(text, "not a video\n");
   const prores = film("prores", { seconds: 1, codec: ["-c:v", "prores_ks"], ext: "mov" });
+  const empty = at("empty.mp4");
+  fs.writeFileSync(empty, "");
+  // Cut off part way, as a download that stopped: one whose index comes
+  // first, and one whose index was to come at the end.
+  const cut = (from, name) => {
+    const bytes = fs.readFileSync(from);
+    fs.writeFileSync(at(name), bytes.subarray(0, Math.floor(bytes.length * 0.4)));
+    return at(name);
+  };
+  const headFirst = cut(film("film12fast", { codec: ["-c:v", "mpeg4", "-q:v", "6", "-movflags", "+faststart"] }), "cut-fast.mp4");
+  const headLast = cut(film("film12", {}), "cut-last.mp4");
   const cases = [
     [fixture("house").file, /musicfit: house\.wav has no picture to lay the music under\n$/],
     [at("nothing.mp4"), /musicfit: Cannot read .*nothing\.mp4: no such file\n$/],
@@ -257,6 +268,9 @@ test("a video that cannot take the fit is refused before any work, and no folder
     [still, /musicfit: still\.png is a still picture, not a video\n$/],
     [prores, /musicfit: prores\.mov's picture is prores, which an MP4 cannot hold without encoding it again: give --video an H\.264 or HEVC copy of it\n$/],
     [film("film14", { seconds: 14 }), /musicfit: film14\.mp4 is 14\.00 s long \(350 frames at 25 fps\) and --length is 12\.00 s: give --length 14, or 350f\n$/],
+    [empty, /musicfit: Cannot read .*empty\.mp4: it is empty\n$/],
+    [headFirst, /musicfit: Cannot read .*cut-fast\.mp4: it is cut short or damaged \(ffmpeg could read \d+ frames, \d\.\d\d s of the 12\.00 s it says it holds\)\n$/],
+    [headLast, /musicfit: Cannot read .*cut-last\.mp4: it is cut short or damaged, so ffmpeg finds no index in it\n$/],
   ];
   for (const [video, message] of cases) {
     const out = at(`refused-${path.basename(video)}`);

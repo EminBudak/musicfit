@@ -25,6 +25,11 @@ const nominal = (fps) => RATES.find((rate) => Math.abs(fps - rate) < rate * 0.00
 const mark = (version, track, source) => `musicfit ${version}: ${track} laid under ${source}`;
 const MARK = /^musicfit \S+: (.+) laid under (.+)$/;
 
+// What ffmpeg prints while it reads a file that is cut short or has a
+// broken packet: a packet cut off at the end, an MP4's samples past the end
+// of the file, a Matroska or WebM file that stops in the middle.
+const DAMAGED = /Packet corrupt|corrupt input packet|partial file|File ended prematurely/;
+
 // What ffmpeg says of the input: its lines from "Input #0" up to the first
 // output.
 function inputSection(said) {
@@ -39,10 +44,12 @@ function inputSection(said) {
 // and of its sound, and the mark of musicfit when musicfit made it. With
 // `scratch`, one frame is copied into an MP4 there too, to see that an MP4
 // holds the picture as it is. Refused with the reason when the video
-// cannot be read, has no picture or a still one, or holds a picture an MP4
-// cannot take without encoding it again.
+// cannot be read, is cut short or damaged, has no picture or a still one,
+// or holds a picture an MP4 cannot take without encoding it again.
 async function probe(file, { scratch = null } = {}) {
   const name = path.basename(file);
+  const size = (fs.statSync(file, { throwIfNoEntry: false }) || {}).size;
+  if (size === 0) throw new Error(`Cannot read ${file}: it is empty`);
   let crc;
   let said;
   try {
@@ -54,6 +61,9 @@ async function probe(file, { scratch = null } = {}) {
   } catch (err) {
     const why = err.stderr || err.message;
     if (/No such file|does not exist/.test(why)) throw new Error(`Cannot read ${file}: no such file`);
+    // An MP4 or a MOV that stops before its index, as one whose recording
+    // or download was cut off; a file ffmpeg only guessed was one is not.
+    if (/moov atom not found/.test(why) && !/detected only with low score/.test(why)) throw new Error(`Cannot read ${file}: it is cut short or damaged, so ffmpeg finds no index in it`);
     if (/Invalid data found|moov atom not found/.test(why)) throw new Error(`Cannot read ${file}: ffmpeg does not know this format`);
     if (/matches no streams/.test(why)) throw new Error(`${name} has no picture to lay the music under`);
     const tag = /Could not find tag for codec (\w+)/.exec(why);
@@ -102,6 +112,11 @@ async function probe(file, { scratch = null } = {}) {
   }
   const start = Number.isFinite(first) ? first * unit : 0;
   const seconds = Number.isFinite(last) ? last * unit : 0;
+  if (DAMAGED.test(said)) {
+    const d = /^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)/m.exec(input);
+    const whole = d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0;
+    throw new Error(`Cannot read ${file}: it is cut short or damaged (ffmpeg could read ${frames} ${frames === 1 ? "frame" : "frames"}, ${(seconds - start).toFixed(2)} s${whole > seconds - start + 0.05 ? ` of the ${whole.toFixed(2)} s it says it holds` : ""})`);
+  }
   if (frames <= 1 || /^(image2|image2pipe|\w+_pipe)$/.test(format) || !(seconds > start) || !step) throw new Error(`${name} is a still picture, not a video`);
   const constant = gaps.every((g) => Math.abs(g - step) <= Math.max(1, step * 0.01));
 
