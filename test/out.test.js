@@ -254,3 +254,16 @@ test("a commit moves the earlier cues.json aside first and the new one in last, 
   }
   assert.deepEqual(snapshot(again), earlier);
 });
+
+test("--analyze and a fit keep their own default folders, so reading a track never replaces its fit", () => {
+  const { file } = fixture("house");
+  const cwd = path.join(dir, "defaults");
+  fs.mkdirSync(cwd);
+  const run = (args) => spawnSync(process.execPath, [CLI, file, ...args], { cwd, encoding: "utf8" });
+  assert.equal(run(["--length", "12"]).status, 0);
+  assert.equal(run(["--analyze"]).status, 0);
+  assert.ok(fs.existsSync(path.join(cwd, "musicfit-house", "fitted.wav")));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-house", "cues.json"), "utf8")).mode, "bars");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-analysis-house", "cues.json"), "utf8")).mode, "analysis");
+  assert.deepEqual(fs.readdirSync(path.join(cwd, "musicfit-analysis-house")).sort(), ["FIT.md", "cues.json", "seams.png"]);
+});

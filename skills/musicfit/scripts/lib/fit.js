@@ -41,7 +41,8 @@ function slug(file) {
 // options: { length, hit, drop, fps, voice, duck, lufs, end, fade, bpm,
 // meter, out, analyze, log }
 async function fit(track, options) {
-  const dir = options.out || `musicfit-${slug(track)}`;
+  // A fit and an analysis of the same track keep their own folders.
+  const dir = options.out || (options.analyze ? `musicfit-analysis-${slug(track)}` : `musicfit-${slug(track)}`);
   if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
   claim(dir, options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), "cues.json", "seams.png", "FIT.md"]);
   const run = begin(dir);
