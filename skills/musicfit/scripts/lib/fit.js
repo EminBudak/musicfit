@@ -78,7 +78,7 @@ async function fit(track, options) {
     return { dir, ...result };
   } catch (err) {
     run.abort();
-    throw err;
+    throw run.explain(err);
   }
 }
 

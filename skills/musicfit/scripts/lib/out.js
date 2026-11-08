@@ -197,6 +197,7 @@ function begin(dir) {
     scratch: (name) => path.join(open(state), ".tmp", name),
     commit: () => commit(state),
     abort: () => abort(state),
+    explain: (err) => explain(state, err),
   };
   live.add(state);
   unfinished.add(state);
@@ -469,6 +470,19 @@ function keep(state, earlierStuck, newStuck) {
   } catch {
     return state.work;
   }
+}
+
+// What a failure while the run made its files says: a full disk in plain
+// words, and a file by the name it would have in the out folder, not in the
+// hidden folder, which goes with the run.
+function explain(state, err) {
+  const said = `${err.message}\n${err.stderr || ""}`;
+  const full = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : /No space left on device/i.test(said) ? "ENOSPC" : /Disk quota exceeded/i.test(said) ? "EDQUOT" : null;
+  if (full) return new Error(`Cannot write to ${state.dir}: ${WHY[full]}`);
+  if (!state.work) return err;
+  if (WHY[err.code] && typeof err.path === "string" && err.path.startsWith(state.work + path.sep)) return new Error(`Cannot write to ${state.dir}: ${WHY[err.code]}`);
+  if (err.message.includes(state.work)) err.message = err.message.split(path.join(state.work, ".tmp") + path.sep).join(state.dir + path.sep).split(state.work + path.sep).join(state.dir + path.sep);
+  return err;
 }
 
 function abort(state) {

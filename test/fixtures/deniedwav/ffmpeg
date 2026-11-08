@@ -1,0 +1,15 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, except the call that writes fitted.wav, which
+# fails as ffmpeg does when it may not create the file there.
+for arg do
+  last=$arg
+done
+case $last in
+  *fitted.wav)
+    echo "[out#0/wav @ 0x6326ca169a40] Error opening output $last: Permission denied" >&2
+    echo "Error opening output file $last." >&2
+    echo "Error opening output files: Permission denied" >&2
+    exit 1
+    ;;
+esac
+exec ffmpeg "$@"

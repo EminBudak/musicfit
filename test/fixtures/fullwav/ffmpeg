@@ -1,0 +1,14 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, except the call that writes fitted.wav, which
+# fails the way ffmpeg 8 does when the disk fills: with the file's path.
+for arg do
+  last=$arg
+done
+case $last in
+  *fitted.wav)
+    echo "[out#0/wav @ 0x6326ca169a40] Error writing trailer of $last: No space left on device" >&2
+    echo "[out#0/wav @ 0x6326ca169a40] Error closing file $last: No space left on device" >&2
+    exit 1
+    ;;
+esac
+exec ffmpeg "$@"

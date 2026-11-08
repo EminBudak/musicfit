@@ -52,7 +52,7 @@ test("a run that fails at its end leaves the earlier files as they were and adds
   // A longer fit, so every file would differ, whose last write fails.
   const run = cli([file, "--length", "14", "--voice", fixture("voice").file, "--out", out], { FFMPEG_PATH: path.join(FIXTURES, "failmix", "ffmpeg") });
   assert.equal(run.status, 1);
-  assert.match(run.stderr, /musicfit: ffmpeg: Error writing trailer: No space left on device/);
+  assert.match(run.stderr, new RegExp(`musicfit: Cannot write to ${quote(out)}: the disk is full\n$`));
   assert.deepEqual(snapshot(out), before);
   assert.deepEqual(fs.readdirSync(path.dirname(out)).filter((e) => e.startsWith(".musicfit-")), []);
 });
@@ -663,4 +663,28 @@ test("a hidden folder with a note of the earlier files it keeps is never removed
   const plain = cli([fixture("house").file, "--length", "12", "--out", folder]);
   assert.equal(plain.status, 0, plain.stderr);
   assert.ok(fs.existsSync(path.join(dead, ".old", "fitted.wav")), "the earlier fitted.wav the message named went");
+});
+
+test("a disk that fills while the run writes is said in plain words, and a file is named in the out folder, never in the hidden one", posix, async () => {
+  const { file } = fixture("house");
+  const folder = outDir("said-full");
+  const full = cli([file, "--length", "12", "--out", folder], { FFMPEG_PATH: path.join(FIXTURES, "fullwav", "ffmpeg") });
+  assert.equal(full.status, 1);
+  assert.equal(full.stderr.split("\n").filter(Boolean).pop(), `musicfit: Cannot write to ${folder}: the disk is full`);
+  const denied = cli([file, "--length", "12", "--out", folder], { FFMPEG_PATH: path.join(FIXTURES, "deniedwav", "ffmpeg") });
+  assert.equal(denied.status, 1);
+  assert.equal(denied.stderr.split("\n").filter(Boolean).pop(), `musicfit: ffmpeg: Error opening output ${path.join(folder, "fitted.wav")}: Permission denied`);
+  // Node's own words for a file it writes.
+  const { fit } = require("../skills/musicfit/scripts/lib/fit");
+  const real = fs.writeFileSync;
+  try {
+    fs.writeFileSync = (at, ...rest) => {
+      if (String(at).endsWith("cues.json")) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", syscall: "write" });
+      return real(at, ...rest);
+    };
+    await assert.rejects(fit(file, { length: 12, out: folder, fps: 30, duck: 10, lufs: -14, end: "auto" }), new RegExp(`^Error: Cannot write to ${quote(folder)}: the disk is full$`));
+  } finally {
+    fs.writeFileSync = real;
+  }
+  assert.ok(!fs.existsSync(folder));
 });
