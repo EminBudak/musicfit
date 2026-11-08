@@ -496,7 +496,10 @@ test("a whole video whose name or tags hold the words ffmpeg prints for a damage
   fs.copyFileSync(film("mute"), named);
   const tagged = at("tagged.mp4");
   ffmpeg(["-i", film("mute"), "-c", "copy", "-metadata", "title=Packet corrupt input packet in stream 0", "-metadata", "comment=File ended prematurely", tagged]);
-  for (const file of [named, tagged]) {
+  // ffmpeg prints the tags again under the output it writes.
+  const titled = at("titled.mp4");
+  ffmpeg(["-i", film("mute"), "-c", "copy", "-metadata", "title=corrupt input packet in stream 0", "-metadata", "comment=A note that ends in: corrupt input packet in stream 0", "-metadata:s:v:0", "handler_name=x: corrupt input packet in stream 0", titled]);
+  for (const file of [named, tagged, titled]) {
     const info = await probe(file);
     assert.deepEqual([info.seconds, info.frames], [12, 300], file);
   }

@@ -39,7 +39,8 @@ const MARK = /^musicfit \S+: a fitted track laid under this picture$/;
 // What ffmpeg prints while it reads a file that is cut short or has a
 // broken packet: a packet cut off at the end, an MP4's samples past the end
 // of the file, a Matroska or WebM file that stops in the middle. Only its
-// own lines are read for these, never the file's name or its tags.
+// own lines are read for these, never the file's name or its tags (see
+// probe()).
 const DAMAGED = [
   /^\[[^\]\n]+\] (?:Packet corrupt\b|File ended prematurely\b|stream \d+, offset 0x[0-9a-f]+: partial file\b|corrupt input packet in stream \d+)/m,
   // ffmpeg 4.4 starts this one with the file's name.
@@ -131,9 +132,14 @@ async function probe(file) {
   // from its first frame.
   const start = Number.isFinite(first) ? first * unit : 0;
   const seconds = Number.isFinite(last) ? (last - first) * unit : 0;
-  // What ffmpeg said as it read the packets, without the file's header,
-  // where its name and its tags are.
-  const reading = said.includes("Input #0") ? said.replace(input, "") : said;
+  // What ffmpeg itself said as it read the packets. Its own lines start at
+  // the left edge; the tags it prints of the file, under the input and again
+  // under the output, are indented, and the header that names the file is
+  // left out.
+  const reading = (said.includes("Input #0") ? said.replace(input, "") : said)
+    .split("\n")
+    .filter((line) => !/^\s/.test(line))
+    .join("\n");
   if (DAMAGED.some((line) => line.test(reading))) {
     const d = /^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)/m.exec(input);
     const whole = d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0;
