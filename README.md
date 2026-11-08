@@ -116,7 +116,7 @@ npx musicfit@latest <track> --length <time> [options]
   --json            print cues.json instead of a summary
 ```
 
-Times are seconds unless they end in `f`, which counts frames at `--fps`, or with `--video` and no `--fps` at the video's frame rate. The track can be any file ffmpeg reads, the sound of a video included.
+Times are seconds unless they end in `f`, which counts frames at `--fps`, or with `--video` and no `--fps` at the video's frame rate. The track can be any file ffmpeg reads, the sound of a video included. musicfit reads files, not addresses: a track, a voice or a video given as `https://...` is refused, so download it first.
 
 Some runs:
 

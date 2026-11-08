@@ -118,6 +118,22 @@ test("a video with no sound says so", () => {
   assert.match(run.stderr, /silent-film\.mp4 has no audio stream/);
 });
 
+test("a track, a voice or a video given as an address is refused before any work: musicfit reads files", () => {
+  const { file } = fixture("house");
+  const address = "http://127.0.0.1:9/track.wav";
+  const cases = [
+    [address, "--length", "10"],
+    [file, "--length", "10", "--voice", "HTTPS://example.com/vo.wav"],
+    [file, "--length", "300f", "--video", "https://example.com/film.mp4"],
+  ];
+  for (const args of cases) {
+    const run = spawnSync(process.execPath, [CLI, ...args, "--out", path.join(dir, "addressed")], { encoding: "utf8" });
+    assert.equal(run.status, 1, run.stderr);
+    const name = args.find((a) => /:\/\//.test(a));
+    assert.equal(run.stderr, `musicfit: Cannot read ${name}: musicfit reads files, not addresses, so download it first\n`);
+  }
+});
+
 test("a voice file that is not there, or a folder that cannot be written, is told before any work", () => {
   const { file } = fixture("house");
   const voice = spawnSync(process.execPath, [CLI, file, "--length", "10", "--voice", path.join(dir, "nobody.wav"), "--out", path.join(dir, "no-voice")], { encoding: "utf8" });

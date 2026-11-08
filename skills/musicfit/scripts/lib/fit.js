@@ -65,10 +65,21 @@ const outDir = (track, options) => options.out || (options.analyze ? `musicfit-$
 
 const seconds = (spans) => spans.reduce((sum, [from, to]) => sum + (to - from), 0);
 
+// A name like https://example.com/track.mp3. musicfit reads files, each by
+// its full path, so an address that is no file is refused before any work.
+const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function files(track, options) {
+  for (const name of [track, options.voice, options.video]) {
+    if (name && ADDRESS.test(name) && !fs.existsSync(name)) throw new Error(`Cannot read ${name}: musicfit reads files, not addresses, so download it first`);
+  }
+}
+
 // options: { length, hit, drop, fps, voice, duck, video, videoSound, lufs,
 // end, fade, bpm, meter, out, analyze, log }. Without fps, frames count at
 // the video's frame rate with a video, and at 30 without one.
 async function fit(track, options) {
+  files(track, options);
   const dir = outDir(track, options);
   if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
   if (options.video && !fs.existsSync(options.video)) throw new Error(`Cannot read ${options.video}: no such file`);
@@ -283,4 +294,4 @@ async function make(track, options, run, video) {
   return { cues: c, analysis: a, plan: p };
 }
 
-module.exports = { fit, slug, outDir };
+module.exports = { fit, files, slug, outDir };

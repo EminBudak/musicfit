@@ -3,7 +3,7 @@
 
 const fs = require("node:fs");
 const os = require("node:os");
-const { fit, outDir } = require("./lib/fit");
+const { fit, files, outDir } = require("./lib/fit");
 const { underVideo } = require("./lib/report");
 const { probe, fpsText } = require("./lib/video");
 const { stopAll } = require("./lib/out");
@@ -53,7 +53,7 @@ Options:
 
 Times are seconds unless they end in f: frames at --fps, or with --video and
 no --fps at the video's frame rate. The track can be any file ffmpeg reads,
-a video's sound included. Needs Node 22 or newer and ffmpeg 4.4 or newer;
+a video's sound included, but a file, not an address. Needs Node 22 or newer and ffmpeg 4.4 or newer;
 set FFMPEG_PATH to pick the ffmpeg.`;
 
 const VALUED = new Set(["--length", "--hit", "--drop", "--fps", "--voice", "--duck", "--video", "--video-sound", "--lufs", "--end", "--fade", "--bpm", "--meter", "--out"]);
@@ -258,6 +258,7 @@ async function main() {
   if (options.frames) {
     pending = outDir(options.track, options);
     try {
+      files(options.track, options);
       await atVideoRate(options);
     } catch (err) {
       if (stopping) return;
