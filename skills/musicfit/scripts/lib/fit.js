@@ -185,18 +185,24 @@ const KEEP_OVER = 3;
 // another amount each time the sound is encoded. So the sound is encoded on
 // its own and measured as a player decodes it, and while its true peak is
 // over, it is limited again at the same loudness with the ceiling lowered
-// by as much and encoded again, four times at most. The encoding with the
-// lowest true peak is the one kept, as `file`. Returns its measurement.
+// by as much and encoded again, four times at most. An encoding that comes
+// out more than half a LU quieter than the first lost loudness to that
+// limiting, so the ceiling is lowered no further. Of the encodings that
+// kept their loudness, the one with the lowest true peak is kept, as
+// `file`. Returns its measurement.
 async function aac(sound, file, lufs) {
   let ceiling = -1;
   let best = null;
+  let first = null;
   for (let round = 0; round < 4; round++) {
     if (round) await normalize(sound, { lufs, peak: ceiling });
     const at = `${file}.${round}.m4a`;
     await encodeAac(sound, at);
     const m = await measureFile(at);
-    if (!best || m.truePeak < best.m.truePeak) best = { at, m };
-    if (!(m.truePeak > -1)) break;
+    first = first || m;
+    const kept = !(m.integrated < first.integrated - 0.5);
+    if (!best || (kept && m.truePeak < best.m.truePeak)) best = { at, m };
+    if (!kept || !(m.truePeak > -1)) break;
     ceiling -= m.truePeak + 1 + 0.1;
   }
   fs.renameSync(best.at, file);
@@ -329,6 +335,7 @@ async function make(track, options, run, video) {
     await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version), start: picture.start });
     laid = { ...picture, sound: video.sound, same: video.same, duck: depth, over, spans: video.spans, loudness: level };
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
+    if (Number.isFinite(level.integrated) && level.integrated < options.lufs - 0.5) options.warnings.push(`video.mp4 is at ${level.integrated.toFixed(1)} LUFS after the AAC encoding, short of the ${options.lufs} LUFS asked for: any louder and its true peaks would pass -1 dBTP.`);
   }
 
   await encodeWav(music, run.file("fitted.wav"));

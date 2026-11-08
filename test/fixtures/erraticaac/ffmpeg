@@ -2,8 +2,10 @@
 # Runs the ffmpeg on PATH, except the loudness measurements of an .m4a, the AAC
 # sound of video.mp4, which read the true peaks listed in $MUSICFIT_TEST_PEAKS,
 # the next one each time, as an AAC encoder that lifts a peak by another
-# amount each time it encodes does. It keeps the packets of each .m4a it
-# measured as $MUSICFIT_TEST_STATE.<n>, so a test can tell which one was kept.
+# amount each time it encodes does, and the loudness listed in
+# $MUSICFIT_TEST_LOUDNESS (-14.0 when it lists none). It keeps the packets of
+# each .m4a it measured as $MUSICFIT_TEST_STATE.<n>, so a test can tell which
+# one was kept.
 meter= m4a=
 for arg do
   case $arg in
@@ -17,11 +19,12 @@ if [ -n "$meter" ] && [ -n "$m4a" ]; then
   echo $count > "$MUSICFIT_TEST_STATE"
   ffmpeg -hide_banner -nostdin -v error -i "$m4a" -map 0:a -c copy -f framecrc - | grep -v '^#' > "$MUSICFIT_TEST_STATE.$count"
   peak=$(echo "$MUSICFIT_TEST_PEAKS" | cut -d' ' -f$count)
+  loudness=$(echo "${MUSICFIT_TEST_LOUDNESS:-}" | cut -d' ' -f$count)
   cat >&2 <<LINES
 [Parsed_ebur128_0 @ 0x55ac8659cdc0] Summary:
 
   Integrated loudness:
-    I:         -14.0 LUFS
+    I:         ${loudness:--14.0} LUFS
     Threshold: -24.0 LUFS
 
   Loudness range:

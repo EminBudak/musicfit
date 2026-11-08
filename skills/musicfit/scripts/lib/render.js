@@ -406,7 +406,9 @@ const PHASES = [0.25, 0.5, 0.75].map((frac) => {
 });
 
 // The true peak at each sample of `x`, or with `into`, the higher of that
-// and what `into` holds there already, for a second channel.
+// and what `into` holds there already, for a second channel. Near either
+// end the sound is taken to be silent past it, as a meter that starts and
+// stops with it hears it.
 async function truePeaks(x, into = null) {
   const n = x.length;
   const out = into || new Float32Array(n);
@@ -417,6 +419,15 @@ async function truePeaks(x, into = null) {
         for (const k of PHASES) {
           let v = 0;
           for (let j = 0; j < 2 * TAPS; j++) v += k[j] * x[i - (TAPS - 1) + j];
+          if (Math.abs(v) > peak) peak = Math.abs(v);
+        }
+      } else {
+        for (const k of PHASES) {
+          let v = 0;
+          for (let j = 0; j < 2 * TAPS; j++) {
+            const at = i - (TAPS - 1) + j;
+            if (at >= 0 && at < n) v += k[j] * x[at];
+          }
           if (Math.abs(v) > peak) peak = Math.abs(v);
         }
       }
@@ -468,7 +479,12 @@ async function limit({ L, R }, ceiling) {
   }
   const lowest = need;
   // Averaged over [i - ahead, i]: every value in that window covers sample
-  // i, so the average is never above what sample i needs.
+  // i, so the average is never above what sample i needs. Before the first
+  // sample the window counts what the first one needs, which is no more
+  // than any of the first 5 ms needs, so a peak there is held like any
+  // other: counted as needing nothing, it pulled the average up, and a
+  // click at the very start went through, whatever the ceiling.
+  const first = n ? lowest[0] : 1;
   const release = 1 - Math.exp(-1 / (0.08 * RATE));
   const kept = { sum: 0, g: 1 };
   await blocks(0, n, (from, to) => {
@@ -476,7 +492,7 @@ async function limit({ L, R }, ceiling) {
     for (let i = from; i < to; i++) {
       sum += lowest[i];
       if (i > ahead) sum -= lowest[i - ahead - 1];
-      const smooth = (sum + Math.max(0, ahead - i)) / (ahead + 1);
+      const smooth = (sum + Math.max(0, ahead - i) * first) / (ahead + 1);
       g = smooth < g ? smooth : g + (smooth - g) * release;
       L[i] *= g;
       R[i] *= g;
@@ -485,10 +501,20 @@ async function limit({ L, R }, ceiling) {
   });
 }
 
+// How far over its ceiling a pass of the limiter can leave a true peak as
+// the meter reads it, in dB: the meter and the limiter see the peaks
+// between samples a little apart, which a lower ceiling makes up for.
+// Further over than this, the limiter does not reach that peak at all.
+const REACH = 1.5;
+
 // Brings audio to `lufs` integrated with true peaks at or below `peak`
 // dBTP, as ffmpeg's EBU R128 meter reads them: one gain, and the limiter
 // only when that gain would push peaks over. A target too loud to reach
-// under the peak limit is left short of it rather than clipped.
+// under the peak limit is left short of it rather than clipped. When a pass
+// leaves a true peak far over the ceiling it held to, the limiter does not
+// reach that peak, and lowering the ceiling again would only take loudness
+// off everything else: the ceiling is lowered no further, and the true peak
+// it reads is what is said.
 async function normalize(audio, { lufs, peak = -1 }) {
   const before = await measure(audio);
   if (!Number.isFinite(before.integrated)) return { before, after: before, gain: 0, limited: false };
@@ -498,10 +524,16 @@ async function normalize(audio, { lufs, peak = -1 }) {
   if (after.truePeak <= peak) return { before, after: await measure(audio), gain, limited: false };
   let ceiling = peak - 0.3;
   let raised = true;
-  for (let round = 0; round < 4; round++) {
+  let unreached = false;
+  const pass = async () => {
     await limit(audio, 10 ** (ceiling / 20));
     after = await measure(audio);
     raised = false;
+    if (after.truePeak > peak && after.truePeak > ceiling + REACH) unreached = true;
+  };
+  for (let round = 0; round < 4; round++) {
+    await pass();
+    if (unreached) break;
     if (after.truePeak > peak) {
       ceiling -= after.truePeak - peak + 0.1;
       continue;
@@ -514,11 +546,9 @@ async function normalize(audio, { lufs, peak = -1 }) {
     raised = true;
   }
   // The last word is always the limiter's.
-  for (let round = 0; round < 3 && (raised || after.truePeak > peak); round++) {
+  for (let round = 0; round < 3 && !unreached && (raised || after.truePeak > peak); round++) {
     if (after.truePeak > peak) ceiling -= after.truePeak - peak + 0.2;
-    await limit(audio, 10 ** (ceiling / 20));
-    after = await measure(audio);
-    raised = false;
+    await pass();
   }
   return { before, after, gain, limited: true };
 }

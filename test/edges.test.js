@@ -64,6 +64,41 @@ test("a target louder than the peaks allow stops short instead of clipping", asy
   assert.ok(cues.loudness.limited);
 });
 
+// Nine seconds of noise at about -20 dBFS with a 6 ms click 6 dB over full
+// scale at `at` seconds, the way a video's own sound can open on one.
+function clickAt(at) {
+  const n = 9 * 48000;
+  const rnd = random(9);
+  const L = Float32Array.from({ length: n }, () => (rnd() * 2 - 1) * 0.17);
+  const from = Math.round(at * 48000);
+  for (let i = 0; i < 0.006 * 48000; i++) L[from + i] = 2 * Math.sin((2 * Math.PI * 2000 * i) / 48000);
+  return { L, R: Float32Array.from(L) };
+}
+
+test("a click in the first 5 ms is held under the true peak limit like any other, at the loudness asked for", async () => {
+  const { normalize } = require("../skills/musicfit/scripts/lib/render");
+  for (const ms of [0, 1, 2, 4, 6, 50]) {
+    const { after } = await normalize(clickAt(ms / 1000), { lufs: -14 });
+    assert.ok(Math.abs(after.integrated + 14) <= 0.2, `click at ${ms} ms: ${after.integrated} LUFS`);
+    assert.ok(after.truePeak <= -1, `click at ${ms} ms: true peak ${after.truePeak} dBTP`);
+  }
+});
+
+test("a peak the limiter cannot reach stops it lowering its ceiling, so everything else keeps its loudness", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, async () => {
+  const { normalize } = require("../skills/musicfit/scripts/lib/render");
+  const was = process.env.FFMPEG_PATH;
+  // A meter that reads every true peak at +5 dBTP, however far it is limited.
+  process.env.FFMPEG_PATH = path.join(__dirname, "fixtures", "unreachedpeak", "ffmpeg");
+  try {
+    const { after } = await normalize(clickAt(0.05), { lufs: -14 });
+    assert.ok(Math.abs(after.integrated + 14) <= 1, `${after.integrated} LUFS`);
+    assert.equal(after.truePeak, 5);
+  } finally {
+    if (was === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = was;
+  }
+});
+
 test("--end fade leaves out the track's own last hit", async () => {
   const { file } = fixture("house");
   const { cues, analysis } = await fit(file, { ...defaults, length: 40, end: "fade", out: outDir("end-fade") });

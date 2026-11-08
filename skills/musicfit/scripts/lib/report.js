@@ -282,7 +282,10 @@ function fitMarkdown(c, { trackName }) {
   }
   if (c.video) {
     const step = c.segments.length + (c.voice || dips ? 1 : 0) + (c.loudness && c.loudness.integrated !== null ? 1 : 0) + 1;
-    lines.push(`${step}. ${c.video.source}'s picture copied packet for packet into \`video.mp4\`, with ${underVideo(c)}, the whole set to ${c.video.loudness.target} LUFS, measured after the AAC encoding.`);
+    // The level it was set to, or where it stopped short of the target.
+    const { target, integrated } = c.video.loudness;
+    const level = integrated !== null && integrated < target - 0.5 ? `the whole raised toward ${target} LUFS but stopped at ${integrated} LUFS, measured after the AAC encoding: any louder and its true peaks would pass -1 dBTP` : `the whole set to ${target} LUFS, measured after the AAC encoding`;
+    lines.push(`${step}. ${c.video.source}'s picture copied packet for packet into \`video.mp4\`, with ${underVideo(c)}, ${level}.`);
   }
   lines.push("");
 

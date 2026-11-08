@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, except that its loudness meter reads every true
+# peak at +5 dBTP, however far the sound is limited: a peak the limiter
+# does not reach.
+case "$*" in
+  *ebur128=*) ;;
+  *) exec ffmpeg "$@" ;;
+esac
+said=$(ffmpeg "$@" 2>&1)
+code=$?
+printf '%s\n' "$said" | sed 's/^\( *Peak: *\)[-+0-9.a-z]*/\15.0/' >&2
+exit $code

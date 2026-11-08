@@ -314,6 +314,27 @@ test("--video-sound keep raises quiet sound effects, so they are about 3 dB loud
   assert.ok(20 * Math.log10(Math.abs(gain.own / gain.music)) > 20, "the effects were not raised");
 });
 
+test("a click in the first 5 ms of a video's own sound, where no music plays yet, is held under -1 dBTP like any other, and video.mp4 is at --lufs", async () => {
+  // A 24 s fit of house.wav with the hit at 16.5 s is silent for its first
+  // second, so the clicks there are set to the target, far louder than they
+  // were, and their peaks are left to the limiter.
+  const clicks = wav("clickhead", 24, (x) => {
+    for (const from of [0, 0.4]) for (let i = 0; i < 0.001 * RATE; i++) x[Math.round(from * RATE) + i] = 0.5 * Math.sin((2 * Math.PI * 2000 * i) / RATE);
+  });
+  const video = film("clickhead", { seconds: 24, sound: clicks });
+  const out = at("clickhead-keep");
+  const run = cli([fixture("house").file, "--length", "24", "--hit", "16.5", "--video", video, "--video-sound", "keep", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const c = cuesOf(out);
+  assert.equal(c.start.kind, "silence");
+  assert.ok(c.video.spans[0].from < 0.01, JSON.stringify(c.video.spans));
+  const loudness = await measureFile(path.join(out, "video.mp4"));
+  assert.ok(Math.abs(loudness.integrated + 14) <= 0.5, `${loudness.integrated} LUFS`);
+  assert.ok(loudness.truePeak <= -1, `true peak ${loudness.truePeak} dBTP`);
+  assert.match(fs.readFileSync(path.join(out, "FIT.md"), "utf8"), /, the whole set to -14 LUFS, measured after the AAC encoding\./);
+  assert.deepEqual(c.warnings, []);
+});
+
 test("a video whose only sounds are short clicks is asked about, keep sets the clicks over the music without dipping it, and voice finds no speech in them", async () => {
   const clicks = wav("clicks", 12, (x) => {
     for (const second of [3, 9]) {
@@ -639,6 +660,30 @@ test("of AAC encodings whose true peaks come out higher and lower each time, the
   const kept = ffmpeg(["-i", path.join(out, "video.mp4"), "-map", "0:a", "-c", "copy", "-f", "framecrc", "pipe:1"]).stdout.split("\n").filter((l) => /^\d/.test(l));
   assert.deepEqual(kept, fs.readFileSync(`${state}.3`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
   assert.notDeepEqual(kept, fs.readFileSync(`${state}.4`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
+});
+
+test("an AAC encoding that came out quieter than the first lost its loudness to the limiting: the ceiling goes no lower, and video.mp4 keeps the loudness", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const state = at(`quieter-${process.hrtime.bigint()}`);
+  const out = at("quieter-fit");
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", out], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "erraticaac", "ffmpeg"), MUSICFIT_TEST_STATE: state, MUSICFIT_TEST_PEAKS: "-0.5 -1.4 -1.6 -1.8", MUSICFIT_TEST_LOUDNESS: "-14.0 -15.2 -16.0 -17.0" } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(fs.readFileSync(state, "utf8").trim(), "2");
+  const c = cuesOf(out);
+  assert.deepEqual(c.video.loudness, { target: -14, integrated: -14, truePeak: -0.5 });
+  assert.deepEqual(c.warnings.filter((w) => /AAC/.test(w)), ["After the AAC encoding the true peak of video.mp4 is -0.5 dBTP, over -1 dBTP."]);
+  const kept = ffmpeg(["-i", path.join(out, "video.mp4"), "-map", "0:a", "-c", "copy", "-f", "framecrc", "pipe:1"]).stdout.split("\n").filter((l) => /^\d/.test(l));
+  assert.deepEqual(kept, fs.readFileSync(`${state}.1`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
+});
+
+test("a video.mp4 that stopped short of the loudness asked for says so, in the summary, in a note and in FIT.md", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const out = at("short-fit");
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", out], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "erraticaac", "ffmpeg"), MUSICFIT_TEST_STATE: at(`short-${process.hrtime.bigint()}`), MUSICFIT_TEST_PEAKS: "-1.2", MUSICFIT_TEST_LOUDNESS: "-15.3" } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /\n {2}Video {3}video\.mp4 is mute\.mp4 with the music \(it had no sound of its own\); -15\.3 LUFS, true peak -1\.2 dBTP\n/);
+  assert.match(run.stdout, /\n {2}Note {4}video\.mp4 is at -15\.3 LUFS after the AAC encoding, short of the -14 LUFS asked for: any louder and its true peaks would pass -1 dBTP\.\n/);
+  const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
+  assert.match(md, /into `video\.mp4`, with the music \(it had no sound of its own\), the whole raised toward -14 LUFS but stopped at -15\.3 LUFS, measured after the AAC encoding: any louder and its true peaks would pass -1 dBTP\./);
+  assert.doesNotMatch(md, /the whole set to -14 LUFS/);
 });
 
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
