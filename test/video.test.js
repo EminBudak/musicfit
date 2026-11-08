@@ -455,7 +455,7 @@ test("a video that cannot take the fit is refused before any work, and no folder
   assert.deepEqual(fs.readdirSync(dir).filter((e) => e.startsWith(".musicfit-")), []);
 });
 
-test("a video musicfit made is refused as --video while its sound would be laid in, and taken with --video-sound drop", () => {
+test("a video musicfit made is refused as --video while its sound would be laid in, naming the video it was made from when its cues.json is beside it, and taken with --video-sound drop", () => {
   const out = at("remade");
   const source = film("film25", { sound: effects() });
   const first = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", source, "--video-sound", "keep", "--out", out]);
@@ -468,6 +468,11 @@ test("a video musicfit made is refused as --video while its sound would be laid 
     assert.equal(again.status, 1, `${how}: ${again.stderr}`);
     assert.match(again.stderr, /musicfit: graded\.mp4 is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from, or --video-sound drop to leave that sound out\n$/);
   }
+  // Given as it is, with the cues.json it came with beside it, the video it
+  // was made from is named.
+  const back = cli([fixture("house").file, "--length", "12", "--hit", "6", "--video", path.join(out, "video.mp4"), "--video-sound", "keep", "--out", at("remade-back")]);
+  assert.equal(back.status, 1, back.stderr);
+  assert.match(back.stderr, /musicfit: video\.mp4 is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from \(film25\.mp4, as the cues\.json beside it says\), or --video-sound drop to leave that sound out\n$/);
   const dropped = cli([fixture("house").file, "--length", "12", "--hit", "6", "--video", graded, "--video-sound", "drop", "--out", at("remade-drop")]);
   assert.equal(dropped.status, 0, dropped.stderr);
   assert.deepEqual(packets(path.join(at("remade-drop"), "video.mp4")), packets(source));

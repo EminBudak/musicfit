@@ -127,8 +127,12 @@ async function readVideo(track, o) {
     o.warnings.push(same === "track" ? `${picture.name}'s own sound is the track, so it is not laid in a second time.` : `${picture.name}'s own sound is the voice given with --voice, so it is laid in once, as the voice.`);
   }
   // A video musicfit made has a fitted track in its sound already, which
-  // would play under the new one.
-  if (picture.made && sound !== "drop" && sound !== "none") throw new Error(`${picture.name} is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from, or --video-sound drop to leave that sound out`);
+  // would play under the new one. The cues.json it came with, when it is
+  // beside it, names the video it was made from.
+  if (picture.made && sound !== "drop" && sound !== "none") {
+    const from = madeFrom(o.video);
+    throw new Error(`${picture.name} is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from${from ? ` (${from}, as the cues.json beside it says)` : ""}, or --video-sound drop to leave that sound out`);
+  }
   const video = { picture, sound, same, own: null, spans: [] };
   if (sound === "drop" || sound === "none") return video;
   o.log && o.log(`Reading ${picture.name}'s own sound`);
@@ -154,6 +158,18 @@ async function readVideo(track, o) {
   if (sound === "voice" && dipped > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${dipped.toFixed(1)} of its ${o.length.toFixed(1)} s, so the music stays dipped most of the way. If that sound is music of its own, --video-sound drop leaves it out.`);
   if (sound === "voice" && !spans.length) o.warnings.push(`No speech was found in ${picture.name}'s own sound, so the music does not dip under it, and it is not raised: it is only turned down if it is louder than ${o.lufs} LUFS.`);
   return { ...video, sound, own, spans };
+}
+
+// The video a musicfit video.mp4 was made from, as the cues.json beside it
+// says, when that cues.json is musicfit's and lists it.
+function madeFrom(file) {
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(path.dirname(file), "cues.json"), "utf8"));
+    const v = c && c.musicfit && c.video;
+    return v && v.file === path.basename(file) && typeof v.source === "string" && v.source ? v.source : null;
+  } catch {
+    return null;
+  }
 }
 
 // A number of decibels as written: 5, 7.5.
