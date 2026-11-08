@@ -142,6 +142,42 @@ test("a track, a voice or a video given as an address is refused before any work
   }
 });
 
+test("a track, a voice or a video that is a folder or may not be read is refused by its name before any work", () => {
+  const { file } = fixture("house");
+  const folder = path.join(dir, "a folder.wav");
+  fs.mkdirSync(folder, { recursive: true });
+  const locked = path.join(dir, "locked.mp4");
+  fs.copyFileSync(file, locked);
+  fs.chmodSync(locked, 0o000);
+  const cases = [];
+  for (const input of [folder, locked]) {
+    let why = "it is a folder";
+    if (input === locked) {
+      // Root reads any file, and Windows keeps no such mode.
+      try {
+        fs.accessSync(locked, fs.constants.R_OK);
+        continue;
+      } catch {
+        why = "permission denied";
+      }
+    }
+    // As the track, the voice and the video, the last also with a length
+    // in frames, which reads the video's frame rate before the run begins.
+    cases.push([[input, "--length", "10"], input, why]);
+    cases.push([[file, "--length", "10", "--voice", input], input, why]);
+    cases.push([[file, "--length", "10", "--video", input], input, why]);
+    cases.push([[file, "--length", "250f", "--video", input], input, why]);
+  }
+  for (const [args, input, why] of cases) {
+    const out = path.join(dir, "refused-input");
+    const run = spawnSync(process.execPath, [CLI, ...args, "--out", out], { encoding: "utf8" });
+    assert.equal(run.status, 1, run.stderr);
+    assert.equal(run.stderr, `musicfit: Cannot read ${input}: ${why}\n`, args.join(" "));
+    assert.ok(!fs.existsSync(out), args.join(" "));
+  }
+  fs.chmodSync(locked, 0o644);
+});
+
 test("a voice file that is not there, or a folder that cannot be written, is told before any work", () => {
   const { file } = fixture("house");
   const voice = spawnSync(process.execPath, [CLI, file, "--length", "10", "--voice", path.join(dir, "nobody.wav"), "--out", path.join(dir, "no-voice")], { encoding: "utf8" });

@@ -69,9 +69,32 @@ const seconds = (spans) => spans.reduce((sum, [from, to]) => sum + (to - from), 
 // its full path, so an address that is no file is refused before any work.
 const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
 
+// Every input is looked at before any work, and one that is not there, is
+// a folder or may not be read is refused by its name: ffmpeg 7 and newer
+// say only "Error opening input: Permission denied", which does not tell
+// the track from the voice or the video.
 function files(track, options) {
-  for (const name of [track, options.voice, options.video]) {
-    if (name && ADDRESS.test(name) && !fs.existsSync(name)) throw new Error(`Cannot read ${name}: musicfit reads files, not addresses, so download it first`);
+  const inputs = [track, options.voice, options.video].filter(Boolean);
+  for (const name of inputs) {
+    if (ADDRESS.test(name) && !fs.existsSync(name)) throw new Error(`Cannot read ${name}: musicfit reads files, not addresses, so download it first`);
+  }
+  const denied = (err) => err.code === "EACCES" || err.code === "EPERM";
+  for (const name of inputs) {
+    let stat;
+    try {
+      stat = fs.statSync(name);
+    } catch (err) {
+      if (err.code === "ENOENT" || err.code === "ENOTDIR") throw new Error(`Cannot read ${name}: no such file`);
+      if (denied(err)) throw new Error(`Cannot read ${name}: permission denied`);
+      throw err;
+    }
+    if (stat.isDirectory()) throw new Error(`Cannot read ${name}: it is a folder`);
+    try {
+      fs.accessSync(name, fs.constants.R_OK);
+    } catch (err) {
+      if (denied(err)) throw new Error(`Cannot read ${name}: permission denied`);
+      throw err;
+    }
   }
 }
 
@@ -81,8 +104,6 @@ function files(track, options) {
 async function fit(track, options) {
   files(track, options);
   const dir = outDir(track, options);
-  if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
-  if (options.video && !fs.existsSync(options.video)) throw new Error(`Cannot read ${options.video}: no such file`);
   const writes = options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), ...(options.video ? ["video.mp4"] : []), "cues.json", "seams.png", "FIT.md"];
   claim(dir, writes, [track, options.voice, options.video]);
   const run = begin(dir);
