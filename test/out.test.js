@@ -923,3 +923,18 @@ test("a run stopped in a folder that may not be changed says its hidden folder c
   assert.deepEqual(JSON.parse(stdout), { ok: false, error: message });
   fs.rmSync(path.join(folder, parts[0]), { recursive: true });
 });
+
+test("a track or a voice named like the words for a full disk is not taken for one", () => {
+  const cwd = path.join(dir, "full-names");
+  fs.mkdirSync(cwd);
+  fs.writeFileSync(path.join(cwd, "No space left on device.wav"), "not audio\n");
+  fs.copyFileSync(fixture("house").file, path.join(cwd, "Disk quota exceeded.wav"));
+  const run = (args) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8" });
+  const track = run(["No space left on device.wav", "--length", "12"]);
+  assert.equal(track.status, 1);
+  assert.equal(track.stderr.split("\n").filter(Boolean).pop(), "musicfit: Cannot read No space left on device.wav: ffmpeg does not know this format");
+  const voice = run(["Disk quota exceeded.wav", "--length", "12", "--voice", "No space left on device.wav"]);
+  assert.equal(voice.status, 1);
+  assert.equal(voice.stderr.split("\n").filter(Boolean).pop(), "musicfit: Cannot read No space left on device.wav: ffmpeg does not know this format");
+  assert.deepEqual(fs.readdirSync(cwd).sort(), ["Disk quota exceeded.wav", "No space left on device.wav"]);
+});

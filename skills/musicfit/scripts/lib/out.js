@@ -549,14 +549,25 @@ function keep(state, earlierStuck, newStuck) {
 // is given as it is.
 function explain(state, err) {
   if (err.told) return err;
-  const words = `${err.message}\n${err.stderr || ""}`;
-  const full = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : /No space left on device/i.test(words) ? "ENOSPC" : /Disk quota exceeded/i.test(words) ? "EDQUOT" : null;
+  const full = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : fullDisk(err.stderr);
   let said = err;
   if (full) said = new Error(`Cannot write to ${state.dir}: ${WHY[full]}`);
   else if (state.work && WHY[err.code] && typeof err.path === "string" && err.path.startsWith(state.work + path.sep)) said = new Error(`Cannot write to ${state.dir}: ${WHY[err.code]}`);
   else if (state.work && err.message.includes(state.work)) err.message = err.message.split(path.join(state.work, ".tmp") + path.sep).join(state.dir + path.sep).split(state.work + path.sep).join(state.dir + path.sep);
   if (state.left) said.message = `${said.message.replace(/\.$/, "")}. ${asWas(state)}.`;
   return said;
+}
+
+// A full disk as ffmpeg says it: one of its own lines, which start at the
+// left edge (a file's tags are indented), ending in the system's words for
+// it. A file's name in a message is never read for them.
+function fullDisk(stderr) {
+  for (const line of String(stderr || "").split(/\r?\n|\r/)) {
+    if (/^\s/.test(line)) continue;
+    if (/: No space left on device\s*$/.test(line)) return "ENOSPC";
+    if (/: Disk quota exceeded\s*$/.test(line)) return "EDQUOT";
+  }
+  return null;
 }
 
 // Takes away what a run that has not ended made: its hidden folder and the
