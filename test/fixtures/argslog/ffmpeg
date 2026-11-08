@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, and leaves a line with the arguments of each call
+# in $MUSICFIT_TEST_STATE, so a test can read what was asked of it.
+echo "$*" >> "$MUSICFIT_TEST_STATE"
+exec ffmpeg "$@"

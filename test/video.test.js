@@ -165,7 +165,7 @@ test("--video writes video.mp4: the picture packet for packet, the fitted track 
   const places = await placesOver(under, music, video, c.video.spans);
   places.forEach((p, i) => {
     assert.ok(p.over >= 2.3, `the effect at ${c.video.spans[i].from} s is ${p.over.toFixed(1)} LU over the music`);
-    assert.ok(Math.abs(p.over - c.video.spans[i].over) <= 0.7, `the effect at ${c.video.spans[i].from} s is ${p.over.toFixed(1)} LU over the music, and cues.json says ${c.video.spans[i].over}`);
+    assert.ok(Math.abs(p.over - c.video.spans[i].over) <= AAC_NOISE, `the effect at ${c.video.spans[i].from} s is ${p.over.toFixed(1)} LU over the music, and cues.json says ${c.video.spans[i].over}`);
   });
   assert.deepEqual(c.warnings, []);
 });
@@ -251,30 +251,46 @@ function weighted(x) {
   return y;
 }
 
+// How far a sound effect in video.mp4 can read from what cues.json says of
+// it, in LU: the AAC encoding adds its own noise to a noise burst, which a
+// meter reads as part of it, by up to a dB, more with ffmpeg 4.4's encoder
+// than with 8's.
+const AAC_NOISE = 1.2;
+
 // How far the video's own sound is over the music in video.mp4 in each place
-// it plays, in LU, and how loud it is there in LUFS: video.mp4's sound split
-// over the place, by least squares, into the music (fitted.wav) and the
-// video's own sound as it was in the video, both K-weighted.
+// it plays, in LU, and how loud it is there in LUFS, as a meter hears them:
+// K-weighted, by their energy. The music's gain in video.mp4 over the place
+// is found by least squares, against fitted.wav and the video's own sound
+// together, as the two can move alike there (a thump on a kick drum); what
+// is left of video.mp4 there once that music is taken out is the video's
+// own sound, by its energy and not its waveform, as ffmpeg's fast AAC
+// coder builds a noise-like sound effect anew rather than copying its
+// waveform, which a meter reads the same. gain is how far each part was
+// moved from fitted.wav and from the video.
 async function placesOver(heard, music, video, spans) {
   const own = mono(await decode(video));
-  const [o, m] = [weighted(own), weighted(music)];
+  const [h, m, o] = [weighted(heard), weighted(music), weighted(own)];
   return spans.map(({ from, to }) => {
     const a = Math.round(from * RATE);
-    const b = Math.min(o.length, m.length, heard.length, Math.round(to * RATE));
-    const gain = parts(heard, music, own, a, b);
-    let po = 0;
-    let pm = 0;
+    const b = Math.min(h.length, m.length, o.length, Math.round(to * RATE));
+    const g = parts(heard, music, own, a, b).music;
+    let mm = 0;
+    let hh = 0;
+    let oo = 0;
     for (let i = a; i < b; i++) {
-      po += (o[i] * gain.own) ** 2;
-      pm += (m[i] * gain.music) ** 2;
+      mm += m[i] * m[i];
+      hh += h[i] * h[i];
+      oo += o[i] * o[i];
     }
-    return { over: 10 * Math.log10(po / pm), level: -0.691 + 10 * Math.log10((2 * po) / (b - a)), gain };
+    const pm = g * g * mm;
+    const po = Math.max(hh - pm, 1e-12 * hh);
+    return { over: pm > 0 ? 10 * Math.log10(po / pm) : Infinity, level: -0.691 + 10 * Math.log10((2 * po) / (b - a)), gain: { music: g, own: Math.sqrt(po / oo) } };
   });
 }
 
 // video.mp4's sound split by least squares into the music (fitted.wav) and
 // the video's own sound as it was in the video, over [a, b) or the whole:
-// the gain each has in it.
+// the gain each has in it. Where no music plays, all of it is the video's.
 function parts(heard, music, own, a = 0, b = Math.min(heard.length, music.length, own.length)) {
   let mm = 0;
   let oo = 0;
@@ -289,6 +305,7 @@ function parts(heard, music, own, a = 0, b = Math.min(heard.length, music.length
     ho += heard[i] * own[i];
   }
   const det = mm * oo - mo * mo;
+  if (!(mm > 0) || !(det > 1e-9 * mm * oo)) return { music: 0, own: oo > 0 ? ho / oo : 0 };
   return { music: (hm * oo - ho * mo) / det, own: (ho * mm - hm * mo) / det };
 }
 
@@ -313,7 +330,7 @@ test("--video-sound keep raises quiet sound effects, so each is about 3 dB loude
   const heard = mono(await decode(path.join(out, "video.mp4")));
   const music = mono(await decode(path.join(out, "fitted.wav")));
   for (const [i, p] of (await placesOver(heard, music, video, c.video.spans)).entries()) {
-    assert.ok(Math.abs(p.over - 3) < 1, `the effect at ${c.video.spans[i].from} s is ${p.over.toFixed(1)} LU over the music`);
+    assert.ok(Math.abs(p.over - 3) <= AAC_NOISE, `the effect at ${c.video.spans[i].from} s is ${p.over.toFixed(1)} LU over the music`);
     // In the video it was 30 dB under it.
     assert.ok(20 * Math.log10(Math.abs(p.gain.own / p.gain.music)) > 20, `the effect at ${c.video.spans[i].from} s was not raised`);
   }
@@ -343,7 +360,7 @@ test("equal sound effects before the drop, on the hit and over the ring-out each
   const music = mono(await decode(path.join(out, "fitted.wav")));
   const places = await placesOver(heard, music, video, c.video.spans);
   // Each place as cues.json says it came out, checked on its own span.
-  places.forEach((p, i) => assert.ok(Math.abs(p.over - c.video.spans[i].over) <= 0.7, `${c.video.spans[i].from} s: ${p.over.toFixed(1)} LU over the music, and cues.json says ${c.video.spans[i].over}`));
+  places.forEach((p, i) => assert.ok(Math.abs(p.over - c.video.spans[i].over) <= AAC_NOISE, `${c.video.spans[i].from} s: ${p.over.toFixed(1)} LU over the music, and cues.json says ${c.video.spans[i].over}`));
   // Before the drop and on the hit about 3 dB over the music; over the
   // quiet ring-out far over it, at the target: never under the music.
   assert.ok(places[0].over >= 2.3 && places[1].over >= 0, places.map((p) => p.over.toFixed(1)).join(", "));
@@ -733,6 +750,30 @@ test("of AAC encodings whose true peaks come out higher and lower each time, the
   const kept = ffmpeg(["-i", path.join(out, "video.mp4"), "-map", "0:a", "-c", "copy", "-f", "framecrc", "pipe:1"]).stdout.split("\n").filter((l) => /^\d/.test(l));
   assert.deepEqual(kept, fs.readFileSync(`${state}.3`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
   assert.notDeepEqual(kept, fs.readFileSync(`${state}.4`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
+});
+
+test("a loud fit's video.mp4 keeps its true peak under -1 dBTP, as twoloop, ffmpeg 8's default AAC coder, did not", async () => {
+  // At -10 LUFS this track came out at +1.3 dBTP with twoloop, 2.3 dB over
+  // what it was held to, after four encodings.
+  const out = at("loud-lofi");
+  const run = cli([fixture("lofi").file, "--length", "12", "--video", film("mute"), "--lufs", "-10", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const heard = await measureFile(path.join(out, "video.mp4"));
+  assert.ok(heard.truePeak <= -1, `true peak ${heard.truePeak} dBTP`);
+  assert.doesNotMatch(run.stdout, /true peak of video\.mp4 is/);
+  // As loud as asked, or a note says how far short it stopped.
+  const c = cuesOf(out);
+  if (c.video.loudness.integrated < -10.5) assert.match(run.stdout, /Note {4}video\.mp4 is at -1\d\.\d LUFS after the AAC encoding, short of the -10 LUFS asked for/);
+  assert.ok(c.video.loudness.integrated >= -11.5, `${c.video.loudness.integrated} LUFS`);
+});
+
+test("the sound of video.mp4 is encoded with ffmpeg's fast AAC coder on any ffmpeg, not with twoloop, ffmpeg 8's default, which lifts the true peak of a loud sound by 3 dB and more", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const state = at(`args-${process.hrtime.bigint()}`);
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("film25", { sound: effects() }), "--video-sound", "keep", "--out", at("args-fit")], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "argslog", "ffmpeg"), MUSICFIT_TEST_STATE: state } });
+  assert.equal(run.status, 0, run.stderr);
+  const encodings = fs.readFileSync(state, "utf8").split("\n").filter((line) => / -c:a aac /.test(line));
+  assert.ok(encodings.length >= 1, "no AAC was encoded");
+  for (const line of encodings) assert.match(line, / -c:a aac -aac_coder fast -b:a 256k /);
 });
 
 test("an AAC encoding that came out quieter than the first lost its loudness to the limiting: the ceiling goes no lower, and video.mp4 keeps the loudness", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
