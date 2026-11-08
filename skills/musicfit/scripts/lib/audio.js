@@ -62,6 +62,12 @@ function reason(stderr, code, signal) {
   return /ffmpeg/i.test(line) ? line : `ffmpeg: ${line}`;
 }
 
+// ffmpeg 4.4 exits with 0 when it cannot finish a file: when the disk fills
+// as it writes an MP4's index or a WAV's sizes, it says "Error writing
+// trailer of <file>: No space left on device" and leaves a file no player
+// reads. A call that says so has failed, whatever its exit code.
+const UNFINISHED = /^(?:\[[^\]\n]*\][ \t]*)*Error writing trailer\b/m;
+
 // The ffmpeg processes running now, so a run that is stopped stops them
 // too: a signal sent to node alone does not reach them.
 const running = new Set();
@@ -99,7 +105,7 @@ function run(args, input) {
     child.on("close", (code, signal) => {
       running.delete(child);
       const stderr = Buffer.concat(err).toString("utf8");
-      if (code === 0) resolve({ chunks: out, stderr });
+      if (code === 0 && !UNFINISHED.test(stderr)) resolve({ chunks: out, stderr });
       else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr, signal }));
     });
     if (input) {

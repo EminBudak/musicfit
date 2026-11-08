@@ -747,6 +747,31 @@ test("a disk that fills while the run writes is said in plain words, and a file 
   assert.ok(!fs.existsSync(folder));
 });
 
+test("a file ffmpeg 4.4 could not finish as the disk filled, though it exits with 0, fails the run in plain words and the earlier files stay", posix, () => {
+  const { file } = fixture("house");
+  const film = path.join(dir, "trailer-film.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const folder = outDir("trailer");
+  const args = [file, "--length", "12", "--hit", "8", "--video", film, "--out", folder];
+  const first = cli(args);
+  assert.equal(first.status, 0, first.stderr);
+  const before = snapshot(folder);
+  // video.mp4, the AAC its sound is measured from, and fitted.wav.
+  for (const name of ["video.mp4", ".0.m4a", "fitted.wav"]) {
+    const run = cli(args, { FFMPEG_PATH: path.join(FIXTURES, "trailer44", "ffmpeg"), MUSICFIT_TEST_TRAILER: name });
+    assert.equal(run.status, 1, `${name}: ${run.stderr}`);
+    assert.equal(run.stderr.split("\n").filter(Boolean).pop(), `musicfit: Cannot write to ${folder}: the disk is full`, name);
+    assert.deepEqual(snapshot(folder), before, name);
+  }
+  // A video.mp4 that cannot be read back is never put in place, whatever ffmpeg said.
+  const quiet = cli(args, { FFMPEG_PATH: path.join(FIXTURES, "trailer44", "ffmpeg"), MUSICFIT_TEST_TRAILER: "video.mp4", MUSICFIT_TEST_QUIET: "1" });
+  assert.equal(quiet.status, 1, quiet.stderr);
+  assert.match(quiet.stderr, /\nmusicfit: The video\.mp4 this run wrote cannot be read back \([^)\n]+\), so it was not put in place\n$/);
+  assert.doesNotMatch(quiet.stderr, /musicfit-part/);
+  assert.deepEqual(snapshot(folder), before);
+});
+
 test("a stop while the run reads the video's frame rate, before it began, is said too, and in --json", posix, async () => {
   const film = path.join(dir, "rate-film.mp4");
   const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", film], { encoding: "utf8" });

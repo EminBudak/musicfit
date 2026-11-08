@@ -237,6 +237,17 @@ async function encodeAac(samples, file) {
 async function mux(file, sound, out, { picture, comment, start }) {
   const tag = picture === "hevc" ? ["-tag:v", "hvc1"] : [];
   await run(["-v", "error", "-copyts", "-itsoffset", (-start).toFixed(6), "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)]);
+  // Read back, every packet of it, before the run may put it in place: an
+  // MP4 whose index did not get written is no video, whatever ffmpeg said.
+  let why = null;
+  try {
+    const { stderr } = await run(["-v", "error", "-i", where(out), "-map", "0", "-c", "copy", "-f", "null", "-"]);
+    if (DAMAGED.some((line) => line.test(stderr))) why = "it is cut short";
+  } catch (err) {
+    if (err.signal || /received signal \d+/.test(err.stderr || "")) throw err;
+    why = err.message.replace(/^ffmpeg: /, "").split(`${where(out)}: `).join("");
+  }
+  if (why) throw new Error(`The video.mp4 this run wrote cannot be read back (${why}), so it was not put in place`);
 }
 
 module.exports = { probe, fits, ownSound, encodeAac, mux, mark, fpsText };
