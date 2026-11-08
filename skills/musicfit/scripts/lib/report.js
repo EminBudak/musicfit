@@ -108,12 +108,13 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
     seams,
     voice: voice ? { file: voice.file, duck: voice.duck, spans: voice.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })) } : null,
     // With --video: video.mp4, the video's picture with this sound under
-    // it. sound is what became of the video's own sound: keep (at its own
-    // level, the music dipping half of --duck under it), voice (set to the
-    // target, the music dipping --duck under it), drop (left out) or none
-    // (it had none); same says when the video was the track or the voice,
-    // which play in its place; spans are where it plays and duck how far
-    // the music dips there.
+    // it. sound is what became of the video's own sound: keep (set to the
+    // target where it plays, the music dipping half of --duck under it),
+    // voice (the same, the music dipping --duck under its speech), drop
+    // (left out) or none (it had none). With keep or voice and no spans it
+    // was only turned down to the target, when it was louder. same says
+    // when the video was the track or the voice, which play in its place;
+    // spans are where it plays and duck how far the music dips there.
     video: video
       ? {
           file: "video.mp4",
@@ -306,11 +307,12 @@ function underVideo(c) {
   if (v.same === "track") return "the music fitted from its own sound, in place of that sound";
   // The music, the voice when there is one, and the video's own sound.
   const all = c.voice ? "the music, the voice and its own sound" : "the music and its own sound";
+  const set = `set to ${v.loudness.target} LUFS where it plays`;
   if (v.sound === "keep" && !v.spans.length) return all;
-  if (v.sound === "keep" && c.voice) return `${all}, the music dipping ${c.voice.duck} dB under the voice and ${v.duck} dB under its own sound`;
-  if (v.sound === "keep") return `${all}, the music dipping ${v.duck} dB under it in ${places(v.spans.length)}`;
+  if (v.sound === "keep" && c.voice) return `${all}, that sound ${set} and the music dipping ${c.voice.duck} dB under the voice and ${v.duck} dB under its own sound`;
+  if (v.sound === "keep") return `${all}, that sound ${set} and the music dipping ${v.duck} dB under it in ${places(v.spans.length)}`;
   if (v.sound === "voice" && !v.spans.length) return `${all}, which had no speech for the music to dip under`;
-  if (v.sound === "voice") return `its own sound${voice}, the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
+  if (v.sound === "voice") return `its own sound ${set}${voice}, the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
   if (v.sound === "drop") return `the music${voice} in place of its own sound`;
   return `the music${voice} (it had no sound of its own)`;
 }

@@ -13,7 +13,7 @@ const { probe, fits, ownSound, encodeAac, mux, mark, fpsText } = require("./vide
 const { RATE: ANALYSIS_RATE } = require("./analyze");
 const { analyzeInThread } = require("./thread");
 const { plan } = require("./plan");
-const { assemble, speech, floorOf, duck, normalize, interleave, scale, attackNear } = require("./render");
+const { assemble, speech, BLIP, floorOf, duck, normalize, setWhere, interleave, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
 const { claim, begin, sameFile } = require("./out");
@@ -93,8 +93,9 @@ async function fit(track, options) {
 // What --video brings, read before any work: the picture, refused when it
 // cannot take this fit, the rate frames count at, and what becomes of the
 // video's own sound. That sound is read now when it is laid in, so a video
-// with sound of its own is refused until --video-sound says what to do
-// with it: musicfit cannot tell speech from sound effects or from music.
+// with sound of its own, the shortest click included, is refused until
+// --video-sound says what to do with it: musicfit cannot tell speech from
+// sound effects or from music.
 async function readVideo(track, o) {
   const picture = await probe(o.video);
   const adopted = o.fps === undefined;
@@ -122,20 +123,24 @@ async function readVideo(track, o) {
   o.log && o.log(`Reading ${picture.name}'s own sound`);
   const own = await ownSound(o.video, Math.round(o.length * RATE), picture.start);
   if (!own) return { ...video, sound: "none" };
-  const spans = await speech(own);
+  // Every sound in it that stands out, the shortest click included.
+  const heard = await speech(own, { shortest: 0 });
   // A sound that never goes quiet, like a music bed, plays all the way
   // through even where speech() hears no more than a steady floor.
-  const plays = (await floorOf(own)) > -40 ? o.length : seconds(spans);
+  const plays = (await floorOf(own)) > -40 ? o.length : seconds(heard);
   if (sound === undefined && plays > 0) {
-    throw new Error(`${picture.name} has sound of its own for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay, turned down to ${o.lufs} LUFS if they are louder, and the music dips ${num(o.duck / 2)} dB under them), voice for speech (set to ${o.lufs} LUFS, the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
+    throw new Error(`${picture.name} has sound of its own for ${plays < 0.1 ? plays.toFixed(2) : plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay, set to ${o.lufs} LUFS where they play, and the music dips ${num(o.duck / 2)} dB under them), voice for speech (set to ${o.lufs} LUFS where it plays, and the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
   }
   // Silence, or a faint room tone the music covers, is kept.
   sound = sound || "keep";
+  // keep dips the music under every sound that stands out, voice under the
+  // stretches long enough to be speech.
+  const spans = sound === "voice" ? heard.filter(([a, b]) => b - a >= BLIP) : heard;
   if (own.over > 0.05) o.warnings.push(`${picture.name}'s own sound runs ${own.over.toFixed(2)} s past the end and was cut there.`);
   const dipped = seconds(spans);
   if (sound === "keep" && plays > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, ${dipped > 0.6 * o.length ? `so the music stays ${num(o.duck / 2)} dB down most of the way` : "along with the music"}. If that sound is music of its own, --video-sound drop leaves it out.`);
   if (sound === "voice" && dipped > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${dipped.toFixed(1)} of its ${o.length.toFixed(1)} s, so the music stays dipped most of the way. If that sound is music of its own, --video-sound drop leaves it out.`);
-  if (sound === "voice" && !spans.length) o.warnings.push(`No speech was found in ${picture.name}'s own sound, so the music was not dipped.`);
+  if (sound === "voice" && !spans.length) o.warnings.push(`No speech was found in ${picture.name}'s own sound, so the music does not dip under it, and it is not raised: it is only turned down if it is louder than ${o.lufs} LUFS.`);
   return { ...video, sound, own, spans };
 }
 
@@ -236,11 +241,12 @@ async function make(track, options, run, video) {
     const { picture, own } = video;
     log(`Laying it under ${picture.name}`);
     // What plays under the picture, cut or padded to it: the music as it
-    // dips, the voice, and the video's own sound. With keep that sound is
-    // only turned down, to the target when it is louder, so a faint room
-    // tone stays faint against the music; with voice it is set to the
-    // target like a voice. Then the whole is set to the target, which can
-    // move the video's own sound a few dB either way.
+    // dips, the voice, and the video's own sound. With keep or voice, that
+    // sound is set to the target where it plays, so it stands that far over
+    // the music as it dips there. A sound with nothing in it that stands
+    // out, a faint room tone, is only turned down, to the target when it is
+    // louder, so it stays faint against the music. Then the whole is set to
+    // the target, which moves them all by the same amount.
     const total = Math.round(picture.seconds * RATE);
     const under = { L: new Float32Array(total), R: new Float32Array(total) };
     const add = (x) =>
@@ -253,7 +259,7 @@ async function make(track, options, run, video) {
     await add(music);
     if (spoken) await add(spoken);
     if (own) {
-      if (video.sound === "voice" && video.spans.length) await normalize(own, { lufs: options.lufs });
+      if (video.spans.length) await setWhere(own, video.spans, options.lufs);
       else {
         const level = await measure(await interleave(own));
         if (level.integrated > options.lufs) await scale(own, 10 ** ((options.lufs - level.integrated) / 20));

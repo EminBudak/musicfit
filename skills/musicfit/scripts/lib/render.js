@@ -308,12 +308,17 @@ async function floorOf(audio) {
   return sorted.length ? sorted[Math.floor(sorted.length * 0.1)] : -Infinity;
 }
 
+// A voice's clicks and breaths are shorter than this, and so are none of
+// its words.
+const BLIP = 0.12;
+
 // Where the voice speaks: frames of 10 ms more than 20 dB below its loudest
 // count as quiet, and so does anything within 10 dB of the room tone (the
 // quietest tenth), so a few words over a long hiss are found too. Pauses
-// under 0.6 s are bridged, blips under 0.12 s dropped. Returns [from, to]
-// spans in seconds.
-async function speech(voice) {
+// under 0.6 s are bridged, and what is left shorter than `shortest` (a
+// blip, for a voice) is dropped: a video's sound effects keep their
+// shortest clicks. Returns [from, to] spans in seconds.
+async function speech(voice, { shortest = BLIP } = {}) {
   const level = await levels(voice);
   const n = level.length;
   const sorted = Float64Array.from(level).sort();
@@ -336,8 +341,13 @@ async function speech(voice) {
     if (last && span[0] - last[1] < 0.6) last[1] = span[1];
     else bridged.push([...span]);
   }
-  return bridged.filter(([a, b]) => b - a >= 0.12);
+  return bridged.filter(([a, b]) => b - a >= shortest);
 }
+
+// How long before a span the music starts to dip, and how long after it
+// the music takes to come back.
+const ATTACK = 0.15;
+const RELEASE = 0.5;
 
 // Lowers the music by `depth` dB wherever the voice speaks, starting 0.15 s
 // before it and coming back over 0.5 s after it stops. A span can carry a
@@ -345,8 +355,8 @@ async function speech(voice) {
 // far as the deepest of them, never further.
 async function duck(music, spans, depth) {
   const gain = new Float32Array(music.L.length).fill(1);
-  const attack = Math.round(0.15 * RATE);
-  const release = Math.round(0.5 * RATE);
+  const attack = Math.round(ATTACK * RATE);
+  const release = Math.round(RELEASE * RATE);
   for (const [from, to, own] of spans) {
     const floor = 10 ** (-(own === undefined ? depth : own) / 20);
     const a = Math.round(from * RATE);
@@ -514,4 +524,44 @@ async function normalize(audio, { lufs, peak = -1 }) {
   return { before, after, gain, limited: true };
 }
 
-module.exports = { assemble, speech, floorOf, duck, normalize, interleave, scale, attackNear };
+// Where the music dips around `spans`, merged where they meet, as sample
+// ranges of a sound `n` samples long.
+function dips(spans, n) {
+  const ranges = [];
+  for (const [from, to] of [...spans].sort((x, y) => x[0] - y[0])) {
+    const a = Math.max(0, Math.round((from - ATTACK) * RATE));
+    const b = Math.min(n, Math.round((to + RELEASE) * RATE));
+    if (b <= a) continue;
+    const last = ranges[ranges.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else ranges.push([a, b]);
+  }
+  return ranges;
+}
+
+// Sets a sound, with one gain over the whole of it, so it reads `lufs`
+// where it plays: over its spans and the music's dip around each, where a
+// meter reads even its shortest click over 400 ms, as a listener hears it
+// against the music. A faint room tone between the spans moves with it.
+// Its true peaks are left to the limiter that holds the whole it goes into.
+// Returns the gain in dB.
+async function setWhere(audio, spans, lufs) {
+  const ranges = dips(spans, audio.L.length);
+  const out = new Float32Array(2 * ranges.reduce((sum, [a, b]) => sum + b - a, 0));
+  let at = 0;
+  for (const [a, b] of ranges) {
+    await blocks(a, b, (from, to) => {
+      for (let i = from; i < to; i++) {
+        out[at++] = audio.L[i];
+        out[at++] = audio.R[i];
+      }
+    });
+  }
+  const where = await measure(out);
+  if (!Number.isFinite(where.integrated)) return 0;
+  const gain = lufs - where.integrated;
+  await scale(audio, 10 ** (gain / 20));
+  return gain;
+}
+
+module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, setWhere, interleave, scale, attackNear };
