@@ -212,7 +212,7 @@ function heldPlaces(name, held, count, lufs) {
   if (held.length > 4) said.push(`${held.length - 4} more`);
   const list = said.length === 1 ? said[0] : `${said.slice(0, -1).join(", ")} and ${said[said.length - 1]}`;
   const where = held.length < count ? `in ${held.length} of the ${count} places it plays` : count === 1 ? "where it plays" : count === 2 ? "in both places it plays" : `in all ${count} places it plays`;
-  return `${name}'s own sound is less than ${KEEP_OVER} dB louder than the music ${where}, at ${list}: it is set no louder than ${num(lufs + KEEP_MOST)} LUFS, ${KEEP_MOST} dB over the target, nor so loud that its own peaks pass -1 dBFS. If it has to stand out there, --video-sound voice dips the music under it instead.`;
+  return `${name}'s own sound is less than ${KEEP_OVER} dB louder than the music ${where}, at ${list}: a place is set no louder than ${num(lufs + KEEP_MOST)} LUFS, ${KEEP_MOST} dB over the target, nor so loud that its own peaks pass -1 dBFS by more than 6 dB, and the limiter that holds the peaks of the whole takes more off a loud sound effect than off the music. If it has to stand out there, --video-sound voice dips the music under it instead.`;
 }
 
 // AAC can lift a true peak over the -1 dBTP the sound was held to, and by

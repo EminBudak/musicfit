@@ -613,8 +613,11 @@ async function loudnessOf({ L, R }, a, b) {
 }
 
 // The peak no place of a video's own sound is raised past where music
-// plays under it, in dBFS: the true peak limit the whole is held to.
-const PEAK = -1;
+// plays under it, in dBFS: 6 dB over the -1 dBTP the whole is held to, so
+// the limiter that holds the whole takes little off the music around a
+// sharp sound, while a sound effect with the peaks of most, like a whoosh
+// or a logo sound on a drop, still reaches its level over the music.
+const PEAK = 5;
 
 // --video-sound keep: each place where the video's own sound plays
 // ([from, to] in seconds) is set `over` dB louder than the music there, both
@@ -624,9 +627,10 @@ const PEAK = -1;
 // louder than the target, so one over the loudest music is not raised so
 // far that the limiter holding the whole has to pull it and the music down
 // again. Where music plays, a place is not raised past the gain that brings
-// its own peak to PEAK either: a sharp sound, or short clicks far apart
-// that read quiet over their place, would have the limiter pull the music
-// down around each. Such places stand less than `over` dB over the music.
+// its own peak to PEAK either: a click, or short clicks far apart that read
+// quiet over their place, raised to their level would have the limiter pull
+// the music down around each. Such places stand less than `over` dB over
+// the music.
 // The gain holds over each place and for up to 0.5 s after it, so its tail
 // keeps the same level, then turns to the next place's along an S-curve
 // that ends 10 ms before it. Returns each place with the gain it got and
