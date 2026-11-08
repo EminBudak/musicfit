@@ -156,13 +156,36 @@ function rename(from, to) {
   }
 }
 
+// Removes a file or a folder with all it holds. Returns whether it is gone:
+// a file held open (on Windows), or a folder that may not be changed, keeps
+// it, and the run says so.
 function remove(at) {
   try {
     fs.rmSync(at, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   } catch {
-    // A file held open (on Windows) keeps it; a later run removes it.
+    // Told by what is left.
   }
+  return !lstat(at);
 }
+
+// A path in the out folder or next to it, written from the out folder as
+// the user named it.
+function shown(state, at) {
+  return path.join(path.dirname(at) === state.target ? state.dir : path.dirname(state.dir), path.basename(at));
+}
+
+// What a run that did not end well says of its out folder once it has
+// taken its own files away: as it was, or as it was but for its hidden
+// folder, when that could not be removed.
+function asWas(state) {
+  if (!state.left) return `${state.dir} is as it was`;
+  return `${state.dir} is as it was but for the hidden folder ${shown(state, state.left)}, which could not be removed; ${sweeps(state)}`;
+}
+
+const sweeps = (state) => `a later run that ends well in ${state.dir} removes it once it is ${STALE / 60000} minutes old`;
+
+// An error whose message is the one to give the user as it is.
+const told = (err) => Object.assign(err, { told: true });
 
 // Empty folders the run made, deepest first; one that holds anything stays,
 // and so do the folders above it.
@@ -226,11 +249,11 @@ function open(state) {
     state.work = work;
     fs.mkdirSync(path.join(work, ".tmp"));
   } catch (err) {
-    if (state.work) remove(state.work);
+    if (state.work && !remove(state.work)) state.left = state.work;
     state.work = null;
     unmake(state.made);
     state.made = [];
-    throw new Error(`Cannot write to ${state.dir}: ${WHY[err.code] || err.message}`);
+    throw told(new Error(`Cannot write to ${state.dir}: ${WHY[err.code] || err.message}${state.left ? `. ${asWas(state)}` : ""}`));
   }
   return work;
 }
@@ -241,11 +264,22 @@ function ended(state, well) {
   if (well) unfinished.delete(state);
 }
 
-// What a failed move says: the file it was, or the folder.
+// What a failed move says: the file it was, or the folder; a full disk in
+// plain words; and Node's words without the paths it adds, which name the
+// hidden folder.
 function moveError(state, err) {
   const name = err.file ? path.join(state.dir, err.file) : state.dir;
   const held = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
-  return { held, why: held ? `${name} is held open by another program, or may not be changed (${err.code})` : err.file ? `${name}: ${err.message}` : err.message };
+  if (held) return { held, why: `${name} is held open by another program, or may not be changed (${err.code})` };
+  if (WHY[err.code]) return { held, why: WHY[err.code] };
+  return { held, why: err.file ? `${name}: ${plainly(err)}` : plainly(err) };
+}
+
+// An error in plain words: a full disk and the like as WHY says them, and
+// Node's own words without the paths it adds.
+function plainly(err) {
+  if (WHY[err.code]) return WHY[err.code];
+  return err.syscall ? err.message.replace(new RegExp(`, ${err.syscall} '[\\s\\S]*$`), "") : err.message;
 }
 
 // The lock: a file made only if it is not there, naming the machine and the
@@ -299,36 +333,65 @@ function staleLock(at) {
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Puts the run's files in place. Two runs that share an out folder take
-// turns: each holds the lock while it moves its files, and waits while
-// another holds it. The moves themselves are synchronous, so no signal
-// handler runs in the middle of them.
+// Puts the run's files in place. A commit that fails says so once the run's
+// own files are gone again, so its message can say what is left.
 async function commit(state) {
+  try {
+    await place(state);
+  } catch (err) {
+    throw settled(state, err);
+  }
+  // The earlier files, and the hidden folder with them.
+  remove(state.work);
+  sweep(state.target);
+  sweep(path.dirname(state.target));
+}
+
+// Why a commit could not put the files in place, as `reason` to go after
+// "Could not put the new files in <dir>: ", and what to do about it.
+const failed = (reason, advice = null) => Object.assign(new Error(reason), { reason, advice });
+
+// The message of a commit that failed. One that left files where they do
+// not belong has said so itself; any other has put every earlier file
+// back, and the run's own files go now.
+function settled(state, err) {
+  if (err.told) return err;
+  abort(state);
+  if (err.stopped) return told(new Error(`stopped, so ${asWas(state)}`));
+  const reason = err.reason || plainly(err);
+  return told(new Error(`Could not put the new files in ${state.dir}: ${reason}. ${asWas(state)}${err.advice ? `; ${err.advice}` : ""}.`));
+}
+
+// Two runs that share an out folder take turns: each holds the lock while
+// it moves its files, and waits while another holds it. The moves
+// themselves are synchronous, so no signal handler runs in the middle of
+// them.
+async function place(state) {
   const { target } = state;
   open(state);
   remove(path.join(state.work, ".tmp"));
   const at = path.join(target, LOCK);
   const started = Date.now();
   for (;;) {
-    if (state.ended) throw new Error(`stopped, so ${state.dir} is as it was`);
+    if (state.ended) throw Object.assign(new Error("stopped"), { stopped: true });
     // The out folder, made now when the run is the first to write there.
     if (!fs.existsSync(target)) {
       try {
         fs.mkdirSync(target);
         state.made.unshift(target);
       } catch (err) {
-        if (err.code !== "EEXIST") throw new Error(`Could not put the new files in ${state.dir}: ${WHY[err.code] || err.message}. Nothing was made.`);
+        if (err.code !== "EEXIST") throw failed(plainly(err));
       }
     }
     let held = false;
     try {
       held = lock(at);
     } catch (err) {
-      if (err.code !== "ENOENT") throw new Error(`Could not put the new files in ${state.dir}: ${WHY[err.code] || err.message}. ${state.dir} is as it was.`);
+      if (err.code !== "ENOENT") throw failed(plainly(err));
       // A link to a folder that is not there, made while the run worked:
       // no waiting makes it one.
       const s = lstat(target);
-      if (s && s.isSymbolicLink() && !fs.existsSync(target)) throw new Error(`Could not put the new files in ${state.dir}: it is a link to ${fs.readlinkSync(target)}, which is not there. ${state.dir} is as it was.`);
+      if (s && s.isSymbolicLink() && !fs.existsSync(target)) throw failed(`it is a link to ${fs.readlinkSync(target)}, which is not there`);
       // Else the folder went again in the meantime: it is made again.
     }
     if (held) {
@@ -341,7 +404,7 @@ async function commit(state) {
           // Gone already.
         }
       }
-      break;
+      return;
     }
     const stale = staleLock(at);
     if (stale !== null) {
@@ -349,13 +412,9 @@ async function commit(state) {
       if (staleLock(at) === stale) fs.rmSync(at, { force: true });
       continue;
     }
-    if (Date.now() - started > LOCK_WAIT) throw new Error(`Could not put the new files in ${state.dir}: another musicfit run has been putting its files there for ${LOCK_WAIT / 1000} s. ${state.dir} is as it was.`);
+    if (Date.now() - started > LOCK_WAIT) throw failed(`another musicfit run has been putting its files there for ${LOCK_WAIT / 1000} s`);
     await pause(25);
   }
-  // The earlier files, and the hidden folder with them.
-  remove(state.work);
-  sweep(target);
-  sweep(path.dirname(target));
 }
 
 // What tells a file from one that came in its place: a new file can get
@@ -428,13 +487,18 @@ function swap(state) {
     const { held, why } = moveError(state, err);
     if (earlierStuck.length || newStuck.length) {
       ended(state, false);
-      const kept = earlierStuck.length ? path.join(keep(state, earlierStuck, newStuck), ".old") : null;
       const it = (names) => (names.length === 1 ? "it is" : "they are");
-      const earlierText = kept ? ` The earlier ${and(earlierStuck)} could not be put back: ${it(earlierStuck)} in ${kept}.` : "";
-      const newText = newStuck.length ? ` The new ${and(newStuck)} could not be taken out again, so in ${state.dir} ${it(newStuck)} this run's.` : "";
-      throw new Error(`Could not put the new files in ${state.dir}: ${why}.${earlierText}${newText}`);
+      let rest = "";
+      if (earlierStuck.length) rest += ` The earlier ${and(earlierStuck)} could not be put back: ${it(earlierStuck)} in ${path.join(keep(state, earlierStuck, newStuck), ".old")}.`;
+      // Only a folder that keeps earlier files stays: with none, the hidden
+      // folder goes, and the new files moved back into it.
+      else if (!remove(state.work)) state.left = state.work;
+      unmake(state.made);
+      if (newStuck.length) rest += ` The new ${and(newStuck)} could not be taken out again, so in ${state.dir} ${it(newStuck)} this run's.`;
+      if (state.left) rest += ` The hidden folder ${shown(state, state.left)} could not be removed; ${sweeps(state)}.`;
+      throw told(new Error(`Could not put the new files in ${state.dir}: ${why}.${rest}`));
     }
-    throw new Error(`Could not put the new files in ${state.dir}: ${why}. ${state.dir} is as it was${held ? "; close the file and run again" : ""}.`);
+    throw failed(why, held ? "close the file and run again" : null);
   }
   ended(state, true);
 }
@@ -446,6 +510,12 @@ function swap(state) {
 const KEPT = "musicfit-kept.txt";
 
 function keep(state, earlierStuck, newStuck) {
+  // Only the earlier files are kept: the new ones moved back go.
+  try {
+    for (const entry of fs.readdirSync(state.work)) if (entry !== ".old") remove(path.join(state.work, entry));
+  } catch {
+    // Kept along with them.
+  }
   const note = path.join(state.work, KEPT);
   const lines = [
     `A musicfit run could not put its new files in ${state.dir}, nor every earlier file back. These earlier files are in .old here:`,
@@ -472,33 +542,42 @@ function keep(state, earlierStuck, newStuck) {
   }
 }
 
-// What a failure while the run made its files says: a full disk in plain
-// words, and a file by the name it would have in the out folder, not in the
-// hidden folder, which goes with the run.
+// What a failure while the run made its files says, once abort() has taken
+// them away: a full disk in plain words, a file by the name it would have
+// in the out folder, not in the hidden folder, which goes with the run, and
+// that hidden folder when it could not be removed. A message commit() wrote
+// is given as it is.
 function explain(state, err) {
-  const said = `${err.message}\n${err.stderr || ""}`;
-  const full = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : /No space left on device/i.test(said) ? "ENOSPC" : /Disk quota exceeded/i.test(said) ? "EDQUOT" : null;
-  if (full) return new Error(`Cannot write to ${state.dir}: ${WHY[full]}`);
-  if (!state.work) return err;
-  if (WHY[err.code] && typeof err.path === "string" && err.path.startsWith(state.work + path.sep)) return new Error(`Cannot write to ${state.dir}: ${WHY[err.code]}`);
-  if (err.message.includes(state.work)) err.message = err.message.split(path.join(state.work, ".tmp") + path.sep).join(state.dir + path.sep).split(state.work + path.sep).join(state.dir + path.sep);
-  return err;
+  if (err.told) return err;
+  const words = `${err.message}\n${err.stderr || ""}`;
+  const full = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : /No space left on device/i.test(words) ? "ENOSPC" : /Disk quota exceeded/i.test(words) ? "EDQUOT" : null;
+  let said = err;
+  if (full) said = new Error(`Cannot write to ${state.dir}: ${WHY[full]}`);
+  else if (state.work && WHY[err.code] && typeof err.path === "string" && err.path.startsWith(state.work + path.sep)) said = new Error(`Cannot write to ${state.dir}: ${WHY[err.code]}`);
+  else if (state.work && err.message.includes(state.work)) err.message = err.message.split(path.join(state.work, ".tmp") + path.sep).join(state.dir + path.sep).split(state.work + path.sep).join(state.dir + path.sep);
+  if (state.left) said.message = `${said.message.replace(/\.$/, "")}. ${asWas(state)}.`;
+  return said;
 }
 
+// Takes away what a run that has not ended made: its hidden folder and the
+// folders it made for it. Returns the hidden folder when it could not be
+// removed, and asWas() says so.
 function abort(state) {
-  if (state.ended) return;
-  ended(state, false);
-  if (state.work) remove(state.work);
-  unmake(state.made);
+  if (!state.ended) {
+    ended(state, false);
+    if (state.work && !remove(state.work)) state.left = state.work;
+    unmake(state.made);
+  }
+  return state.left || null;
 }
 
 // Stops every run of this process that has not ended: their ffmpeg, then
-// their hidden folders. Returns the out folders of the runs that began and
-// did not end well, these and any that failed a moment before.
+// their hidden folders. Returns what each run that began and did not end
+// well, these and any that failed a moment before, says of its out folder.
 function stopAll() {
   require("./audio").stopChildren();
   for (const state of [...live]) abort(state);
-  return [...unfinished].map((state) => state.dir);
+  return [...unfinished].map(asWas);
 }
 
 // Whether a process of that number runs on this machine.

@@ -701,6 +701,8 @@ test("a commit that can put neither its new file out nor the earlier one back sa
   assert.equal(String(error), `Error: Could not put the new files in ${folder}: ${path.join(folder, "mix.wav")}: not now. The earlier fitted.wav could not be put back: it is in ${path.join(folder, kept, ".old")}. The new fitted.wav could not be taken out again, so in ${folder} it is this run's.`);
   assert.equal(fs.readFileSync(path.join(folder, "fitted.wav"), "utf8"), "new fitted.wav\n");
   assert.ok(fs.existsSync(path.join(folder, kept, ".old", "fitted.wav")));
+  // It keeps the earlier files and the note, not the new files moved back into it.
+  assert.deepEqual(fs.readdirSync(path.join(folder, kept)).sort(), [".old", "musicfit-kept.txt"]);
   const note = fs.readFileSync(path.join(folder, kept, "musicfit-kept.txt"), "utf8");
   assert.match(note, new RegExp(`\n  \\.old/fitted\\.wav, which belongs in ${quote(folder)} as fitted\\.wav\n`));
   assert.match(note, new RegExp(`In ${quote(folder)}, fitted\\.wav is that run's new file: remove it first\\.`));
@@ -766,4 +768,158 @@ test("a stop while the run reads the video's frame rate, before it began, is sai
   assert.equal(stderr, `musicfit: stopped, so ${folder} is as it was\n`);
   assert.deepEqual(JSON.parse(stdout), { ok: false, error: `stopped, so ${folder} is as it was` });
   assert.ok(!fs.existsSync(folder));
+});
+
+test("a fit whose commit fails says where the earlier files went, in a folder that is there, also when the disk is full", async () => {
+  const { fit } = require("../skills/musicfit/scripts/lib/fit");
+  const { file } = fixture("house");
+  const options = (folder, more = {}) => ({ length: 12, out: folder, fps: 30, duck: 10, lufs: -14, end: "auto", warnings: [], ...more });
+  const cases = [
+    // The hidden folder cannot be renamed to musicfit-kept- either, so it is named.
+    ["kept-unrenamed", (from, to) => Object.assign(new Error("not now"), { code: "EIO" }), false, /: .*seams\.png: not now\. The earlier fitted\.wav could not be put back: it is in (.+\/\.musicfit-part-[^/]+\/\.old)\.$/],
+    // A move that fails as a full folder does: the message keeps where the earlier files are.
+    ["kept-full", (from, to) => Object.assign(new Error(`ENOSPC: no space left on device, rename '${from}' -> '${to}'`), { code: "ENOSPC", syscall: "rename" }), true, /: the disk is full\. The earlier fitted\.wav could not be put back: it is in (.+\/musicfit-kept-[^/]+\/\.old)\.$/],
+  ];
+  for (const [name, failure, renamed, message] of cases) {
+    const folder = outDir(name);
+    await fit(file, options(folder));
+    const earlier = fs.readFileSync(path.join(folder, "fitted.wav"));
+    const real = fs.renameSync;
+    let count = 0;
+    let error = null;
+    try {
+      fs.renameSync = (from, to) => {
+        const busy = Object.assign(new Error(`EBUSY: resource busy or locked, rename '${from}' -> '${to}'`), { code: "EBUSY", syscall: "rename" });
+        if (to === path.join(folder, "fitted.wav") && path.basename(path.dirname(from)) === ".old") throw busy;
+        if (!renamed && path.basename(to).startsWith("musicfit-kept-")) throw busy;
+        if (from.startsWith(folder + path.sep) && ++count === 4) throw failure(from, to);
+        return real(from, to);
+      };
+      await fit(file, options(folder, { hit: 8 }));
+    } catch (err) {
+      error = err;
+    } finally {
+      fs.renameSync = real;
+    }
+    assert.ok(error, `${name}: the fit did not fail`);
+    const named = message.exec(error.message);
+    assert.ok(named, `${name}: ${error.message}`);
+    assert.ok(named[1].startsWith(folder + path.sep), `${name}: ${named[1]}`);
+    assert.ok(fs.readFileSync(path.join(named[1], "fitted.wav")).equals(earlier), `${name}: the folder named does not hold the earlier fitted.wav`);
+  }
+});
+
+test("a commit that fails with only a new file stuck in the out folder leaves no hidden folder", async () => {
+  const folder = outDir("new-stuck");
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, "cues.json"), JSON.stringify({ musicfit: "test", file: "fitted.wav", mix: null, video: null }));
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(folder, name), `old ${name}\n`);
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md", "video.mp4"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  const real = { renameSync: fs.renameSync, unlinkSync: fs.unlinkSync };
+  const busy = () => Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+  let error = null;
+  try {
+    // The last move fails, and the new video.mp4, which no earlier file
+    // had the name of, can be neither moved back nor removed.
+    fs.renameSync = (from, to) => {
+      if (from === path.join(folder, "video.mp4")) throw busy();
+      if (to === path.join(folder, "cues.json") && !from.includes(`${path.sep}.old${path.sep}`)) throw Object.assign(new Error("not now"), { code: "EIO" });
+      return real.renameSync(from, to);
+    };
+    fs.unlinkSync = (at) => {
+      if (at === path.join(folder, "video.mp4")) throw busy();
+      return real.unlinkSync(at);
+    };
+    await run.commit();
+  } catch (err) {
+    error = err;
+  } finally {
+    Object.assign(fs, real);
+  }
+  run.abort();
+  assert.equal(String(error), `Error: Could not put the new files in ${folder}: ${path.join(folder, "cues.json")}: not now. The new video.mp4 could not be taken out again, so in ${folder} it is this run's.`);
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png", "video.mp4"]);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) assert.equal(fs.readFileSync(path.join(folder, name), "utf8"), `old ${name}\n`);
+});
+
+test("a run whose hidden folder cannot be removed says so, when its commit fails and when it fails before", async () => {
+  const real = { rmSync: fs.rmSync, openSync: fs.openSync, writeFileSync: fs.writeFileSync };
+  // The hidden folder stays, as one in a folder that may not be changed does.
+  const stays = () => {
+    fs.rmSync = (at, ...rest) => {
+      if (/\.musicfit-part-\d+-[0-9a-f]{8}$/.test(String(at))) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      return real.rmSync(at, ...rest);
+    };
+  };
+  const left = (folder) => fs.readdirSync(folder).filter((e) => e.startsWith(".musicfit-part-"));
+  const said = (folder, part) => `${folder} is as it was but for the hidden folder ${path.join(folder, part)}, which could not be removed; a later run that ends well in ${folder} removes it once it is 15 minutes old`;
+
+  const folder = goodFit("left-commit");
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  let error = null;
+  try {
+    stays();
+    fs.openSync = (at, ...rest) => {
+      if (path.basename(String(at)) === out.LOCK) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      return real.openSync(at, ...rest);
+    };
+    await run.commit();
+  } catch (err) {
+    error = err;
+  } finally {
+    Object.assign(fs, real);
+  }
+  assert.equal(left(folder).length, 1);
+  assert.equal(String(error), `Error: Could not put the new files in ${folder}: permission denied. ${said(folder, left(folder)[0])}.`);
+
+  const { fit } = require("../skills/musicfit/scripts/lib/fit");
+  const plain = goodFit("left-plain");
+  const before = snapshot(plain);
+  error = null;
+  try {
+    stays();
+    fs.writeFileSync = (at, ...rest) => {
+      if (String(at).endsWith("cues.json")) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC", syscall: "write" });
+      return real.writeFileSync(at, ...rest);
+    };
+    await fit(fixture("house").file, { length: 12, out: plain, fps: 30, duck: 10, lufs: -14, end: "auto", warnings: [] });
+  } catch (err) {
+    error = err;
+  } finally {
+    Object.assign(fs, real);
+  }
+  assert.equal(left(plain).length, 1);
+  assert.equal(String(error), `Error: Cannot write to ${plain}: the disk is full. ${said(plain, left(plain)[0])}.`);
+  fs.rmSync(path.join(plain, left(plain)[0]), { recursive: true });
+  assert.deepEqual(snapshot(plain), before);
+});
+
+test("a run stopped in a folder that may not be changed says its hidden folder could not be removed, and in --json", { skip: process.platform === "win32" ? "the stand-ins are shell scripts" : process.getuid && process.getuid() === 0 ? "root may change any folder" : false }, async () => {
+  const folder = goodFit("left-stopped");
+  const mark = path.join(dir, `left-stopped-${process.hrtime.bigint()}`);
+  const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", "--out", folder, "--json"], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "slowwav", "ffmpeg"), MUSICFIT_TEST_MARK: mark } });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += d));
+  child.stderr.on("data", (d) => (stderr += d));
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 12000 && !fs.existsSync(mark); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(fs.existsSync(mark), "the run never wrote a WAV");
+  fs.chmodSync(folder, 0o555);
+  let end;
+  try {
+    child.kill("SIGTERM");
+    end = await ended;
+  } finally {
+    fs.chmodSync(folder, 0o755);
+  }
+  assert.equal(end.signal, "SIGTERM", `${end.code} ${stderr}`);
+  const parts = fs.readdirSync(folder).filter((e) => e.startsWith(".musicfit-part-"));
+  assert.equal(parts.length, 1, stderr);
+  const message = `stopped, so ${folder} is as it was but for the hidden folder ${path.join(folder, parts[0])}, which could not be removed; a later run that ends well in ${folder} removes it once it is 15 minutes old`;
+  assert.equal(stderr, `musicfit: ${message}\n`);
+  assert.deepEqual(JSON.parse(stdout), { ok: false, error: message });
+  fs.rmSync(path.join(folder, parts[0]), { recursive: true });
 });

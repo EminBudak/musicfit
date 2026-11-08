@@ -218,8 +218,8 @@ function stopOnSignals(json) {
       if (stopping) return;
       stopping = true;
       const stopped = stopAll();
-      for (const dir of stopped.length || !pending ? stopped : [pending]) {
-        const message = `stopped, so ${dir} is as it was`;
+      for (const said of stopped.length || !pending ? stopped : [`${pending} is as it was`]) {
+        const message = `stopped, so ${said}`;
         if (json) say(1, JSON.stringify({ ok: false, error: message }) + "\n");
         say(2, `musicfit: ${message}\n`);
       }
