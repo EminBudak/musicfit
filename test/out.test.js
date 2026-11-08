@@ -488,15 +488,32 @@ test("a track named in any script gets a folder of its own, and one with no lett
   assert.equal(slug("Şarkı Güzel.mp3"), "sarkı-guzel");
   assert.equal(slug("İstanbul.m4a"), "istanbul");
   assert.equal(slug("Café del Mar (Remix).flac"), "cafe-del-mar-remix");
+  // The same name written with a separate accent.
+  assert.equal(slug("Cafe\u0301 del Mar (Remix).flac"), "cafe-del-mar-remix");
   assert.equal(slug("موسيقى.wav"), "موسيقى");
   assert.equal(slug("트랙.wav"), "트랙");
   assert.match(slug("!!!.wav"), /^track-[0-9a-f]{6}$/);
   assert.notEqual(slug("!!!.wav"), slug("???.wav"));
+  // A sign that needs no letter is no name: an emoji with its variation selector.
+  assert.match(slug("\u2764\ufe0f.wav"), /^track-[0-9a-f]{6}$/);
+  // Marks that are part of a letter stay: the vowel signs of Hindi, Tamil
+  // and Thai, and the й of Russian.
+  for (const [a, b] of [["गाना.mp3", "गुना.mp3"], ["काल.wav", "कल.wav"], ["किल.wav", "कल.wav"], ["கானா.mp3", "கனா.mp3"], ["เพลง.mp3", "เพลิง.mp3"], ["мой.wav", "мои.wav"]]) {
+    assert.notEqual(slug(a), slug(b), `${a} and ${b}`);
+  }
+  assert.equal(slug("गाना.mp3"), "गाना");
+  assert.equal(slug("เพลิง.mp3"), "เพลิง");
+  // A long name is cut, and ends in a hash of the whole of it.
+  const long = (n) => `Epic Cinematic Orchestral Trailer Music for a Product Launch Video (${n}).wav`;
+  assert.notEqual(slug(long(1)), slug(long(2)));
+  assert.match(slug(long(1)), /^epic-cinematic-orchestral-trailer-music-for-a-product-[0-9a-f]{6}$/);
   assert.equal(Array.from(slug(`${"а".repeat(100)}.wav`)).length, 60);
+  assert.notEqual(slug(`${"а".repeat(100)}.wav`), slug(`${"а".repeat(99)}б.wav`));
 
   const cwd = path.join(dir, "scripts");
   fs.mkdirSync(cwd);
-  for (const name of ["песня один.wav", "歌 二.wav"]) fs.copyFileSync(fixture("house").file, path.join(cwd, name));
-  for (const name of ["песня один.wav", "歌 二.wav"]) assert.equal(spawnSync(process.execPath, [CLI, name, "--length", "10"], { cwd, encoding: "utf8" }).status, 0);
-  assert.deepEqual(fs.readdirSync(cwd).filter((e) => e.startsWith("musicfit-")).sort(), ["musicfit-песня-один", "musicfit-歌-二"].sort());
+  const names = ["песня один.wav", "歌 二.wav", "गाना.wav", "गुना.wav"];
+  for (const name of names) fs.copyFileSync(fixture("house").file, path.join(cwd, name));
+  for (const name of names) assert.equal(spawnSync(process.execPath, [CLI, name, "--length", "10"], { cwd, encoding: "utf8" }).status, 0);
+  assert.deepEqual(fs.readdirSync(cwd).filter((e) => e.startsWith("musicfit-")).sort(), ["musicfit-песня-один", "musicfit-歌-二", "musicfit-गाना", "musicfit-गुना"].sort());
 });
