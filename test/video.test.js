@@ -365,8 +365,9 @@ test("frames count at the video's rate without --fps, another --fps is noted, an
   assert.equal(other.status, 0, other.stderr);
   assert.match(other.stdout, /Note {4}film25\.mp4 runs at 25 fps and --fps is 30, so the frames in cues\.json are not the video's: leave --fps out, or give --fps 25, to count them as the video does\./);
 
-  // Every seventh frame left out, so frames last one or two thirtieths.
-  const vfr = film("vfr", { fps: 30, filter: ["-vf", "select='not(eq(mod(n\\,7)\\,3))'", "-vsync", "vfr"] });
+  // Every seventh frame left out and every fifth one 12 ms late, in a
+  // timebase of milliseconds: frames come at no steady rate.
+  const vfr = film("vfr", { fps: 30, filter: ["-vf", "select='not(eq(mod(n\\,7)\\,3))',settb=1/1000,setpts='PTS+if(eq(mod(N\\,5)\\,2)\\,12\\,0)'", "-vsync", "vfr", "-enc_time_base", "1/1000"] });
   const inFrames = cli([fixture("house").file, "--length", "360f", "--video", vfr, "--out", at("vfr-frames")]);
   assert.equal(inFrames.status, 1);
   assert.match(inFrames.stderr, /musicfit: vfr\.mp4 has no steady frame rate, so a time in frames does not name one moment of it: give --length in seconds, or give --fps\n$/);
@@ -375,7 +376,34 @@ test("frames count at the video's rate without --fps, another --fps is noted, an
   assert.match(long.stderr, /musicfit: vfr\.mp4 is 12\.00 s long and --length is 13\.00 s: give --length 12\n$/);
   const seconds = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", vfr, "--out", at("vfr-fit")]);
   assert.equal(seconds.status, 0, seconds.stderr);
-  assert.match(seconds.stdout, /Note {4}vfr\.mp4 has no steady frame rate, so the frames in cues\.json count at its average, 25\.75 fps\./);
+  // 309 frames over the 12 s and the last one's length, which encoders
+  // write a little differently: 25.75 on ffmpeg 8, 25.749 on 4.4.
+  assert.match(seconds.stdout, /Note {4}vfr\.mp4 has no steady frame rate, so the frames in cues\.json count at its average, 25\.7[45]\d* fps\./);
+});
+
+test("frames left out of a steady rate are places in it: a recording that dropped frames, and a cut that keeps a frame from after its end, count at their rate", async () => {
+  const { probe } = require("../skills/musicfit/scripts/lib/video");
+  // Every seventh frame left out: the others stay on the 30 fps grid.
+  const dropped = film("dropped", { fps: 30, filter: ["-vf", "select='not(eq(mod(n\\,7)\\,3))'", "-vsync", "vfr"] });
+  const info = await probe(dropped);
+  assert.deepEqual([info.constant, info.fps, info.frames, info.seconds], [true, 30, 360, 12]);
+  const out = at("dropped-fit");
+  const run = cli([fixture("house").file, "--length", "360f", "--hit", "240f", "--video", dropped, "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const c = cuesOf(out);
+  assert.deepEqual([c.fps, c.length, c.drop.time, c.video.fps, c.video.frames, c.video.steady], [30, 12, 8, 30, 360, true]);
+  assert.doesNotMatch(run.stdout, /steady/);
+  // As ffmpeg -ss 2.5 -t 6 -c copy can leave an H.264 cut: its last frame
+  // comes three thirtieths after the one before, and the cut plays 6.1 s.
+  const cut = film("tail-gap", { fps: 30, seconds: 6.1, filter: ["-vf", "select='not(between(n\\,180\\,181))'", "-vsync", "vfr"] });
+  const tail = await probe(cut);
+  assert.deepEqual([tail.constant, tail.fps, tail.frames, Number(tail.seconds.toFixed(3))], [true, 30, 183, 6.1]);
+  const short = cli([fixture("house").file, "--length", "6", "--video", cut, "--out", at("tail-gap-6")]);
+  assert.equal(short.status, 1);
+  assert.match(short.stderr, /musicfit: tail-gap\.mp4 is 6\.10 s long \(183 frames at 30 fps\) and --length is 6\.00 s: give --length 6\.1, or 183f\n$/);
+  const whole = cli([fixture("house").file, "--length", "183f", "--video", cut, "--out", at("tail-gap-fit")]);
+  assert.equal(whole.status, 0, whole.stderr);
+  assert.deepEqual(packets(path.join(at("tail-gap-fit"), "video.mp4")), packets(cut));
 });
 
 test("a 29.97 fps video counts at 29.97 and a 30 fps one at 30, even in a timebase of whole milliseconds", async () => {

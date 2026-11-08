@@ -113,10 +113,7 @@ async function probe(file) {
     if (Number.isFinite(at)) packets.push({ at, duration });
   }
   // The step from frame to frame: the middle one of the gaps between their
-  // times, else of their durations. The rate holds steady when every gap
-  // is that step, give or take a tick of the timebase or a millisecond (a
-  // 29.97 fps video in a millisecond timebase steps 33 and 34, and keeps
-  // those steps when it is copied into a finer one).
+  // times, else of their durations.
   const times = packets.map((p) => p.at).sort((a, b) => a - b);
   const gaps = times.slice(1).map((t, i) => t - times[i]).filter((d) => d > 0);
   const durations = packets.map((p) => p.duration).filter((d) => d > 0);
@@ -146,7 +143,20 @@ async function probe(file) {
     throw new Error(`Cannot read ${file}: it is cut short or damaged (ffmpeg could read ${frames} ${frames === 1 ? "frame" : "frames"}, ${seconds.toFixed(2)} s${whole > seconds + 0.05 ? ` of the ${whole.toFixed(2)} s it says it holds` : ""})`);
   }
   if (frames <= 1 || /^(image2|image2pipe|\w+_pipe)$/.test(format) || !(seconds > 0) || !step) throw new Error(`${name} is a still picture, not a video`);
-  const constant = gaps.every((g) => Math.abs(g - step) <= Math.max(1, step * 0.01, 0.0011 / unit));
+  // The rate holds steady when every gap is a whole number of steps, give
+  // or take a tick of the timebase or a millisecond (a 29.97 fps video in a
+  // millisecond timebase steps 33 and 34, and keeps those steps when it is
+  // copied into a finer one). A gap of two steps or more is frames left
+  // out, the one before it shown for longer: a recording that dropped
+  // frames, or a cut made without encoding again that keeps a frame from
+  // after the cut. Its frames still count at the rate, empty places
+  // included. A step is measured as the mean of the gaps of one step.
+  const tolerance = Math.max(1, step * 0.01, 0.0011 / unit);
+  const single = gaps.filter((g) => Math.abs(g - step) <= tolerance);
+  const period = single.length ? single.reduce((sum, g) => sum + g, 0) / single.length : step;
+  const steps = gaps.map((g) => Math.round(g / period));
+  const constant = gaps.every((g, i) => steps[i] >= 1 && Math.abs(g - steps[i] * period) <= tolerance);
+  const places = steps.reduce((sum, k) => sum + k, 0);
 
   try {
     await run(["-v", "error", "-i", where(file), "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+delay_moov", "pipe:1"]);
@@ -157,15 +167,16 @@ async function probe(file) {
   }
 
   // A steady rate from the first frame to the last, which a timebase in
-  // whole milliseconds rounds no frame of; else frames over the time.
+  // whole milliseconds rounds no frame of; else frames over the time. At a
+  // steady rate the frames are the places from the first to the last.
   const span = (times[times.length - 1] - times[0]) * unit;
   return {
     file,
     name,
     seconds,
     start,
-    frames,
-    fps: constant && span > 0 ? nominal((times.length - 1) / span) : frames / seconds,
+    frames: constant && span > 0 ? places + 1 : frames,
+    fps: constant && span > 0 ? nominal(places / span) : frames / seconds,
     constant,
     picture: (/: Video: (\w+)/.exec(pictureLine) || [])[1] || "unknown",
     sound: soundLine ? (/: Audio: (\w+)/.exec(soundLine) || [])[1] || "unknown" : null,
