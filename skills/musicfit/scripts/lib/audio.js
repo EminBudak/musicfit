@@ -3,7 +3,9 @@
 // ffmpeg does the decoding, the encoding and the loudness measurement.
 // Samples travel through pipes as raw 32-bit floats, so nothing is written
 // to disk but the final files. Every call here works with ffmpeg 4.4 (the
-// one Ubuntu 22.04 has) and newer.
+// one Ubuntu 22.04 has) and newer. A sound goes to ffmpeg as interleaved
+// floats, or as stereo { L, R }, which is interleaved a block at a time on
+// its way, so no interleaved copy of a long sound is ever held whole.
 
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -104,9 +106,36 @@ function run(args, input) {
       // ffmpeg may stop reading early when it fails; the error that follows
       // tells why, the broken pipe does not.
       child.stdin.on("error", () => {});
-      child.stdin.end(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
+      if (input.L) feed(child.stdin, input).catch(() => {});
+      else child.stdin.end(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
     }
   });
+}
+
+// Stereo { L, R } written to ffmpeg as interleaved floats, a block at a
+// time, each written once the one before has gone down the pipe.
+async function feed(stdin, { L, R }) {
+  const block = 1 << 16;
+  const ready = () =>
+    new Promise((resolve) => {
+      const go = () => {
+        stdin.off("drain", go);
+        stdin.off("close", go);
+        resolve();
+      };
+      stdin.on("drain", go);
+      stdin.on("close", go);
+    });
+  for (let from = 0; from < L.length && !stdin.destroyed; from += block) {
+    const to = Math.min(L.length, from + block);
+    const out = new Float32Array(2 * (to - from));
+    for (let i = from; i < to; i++) {
+      out[2 * (i - from)] = L[i];
+      out[2 * (i - from) + 1] = R[i];
+    }
+    if (!stdin.write(Buffer.from(out.buffer))) await ready();
+  }
+  stdin.end();
 }
 
 // The pipe's chunks copied byte for byte into one array of floats, without
@@ -155,7 +184,7 @@ async function decode(file, { rate = RATE, channels = 2, from = null } = {}) {
   }
 }
 
-// Writes interleaved stereo floats as a 24-bit WAV. bitexact leaves out the
+// Writes a stereo sound as a 24-bit WAV. bitexact leaves out the
 // header's note of the ffmpeg that wrote it, so any ffmpeg writes the same
 // bytes for the same sound.
 async function encodeWav(samples, file, { rate = RATE, channels = 2 } = {}) {

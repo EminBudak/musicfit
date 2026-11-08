@@ -218,8 +218,8 @@ async function ownSound(file, n, start) {
   return { L, R, over: Math.max(0, x.length / 2 - n) / RATE };
 }
 
-// The interleaved sound as AAC in an .m4a of its own, to be measured as a
-// player hears it before the picture is copied over it once.
+// The sound as AAC in an .m4a of its own, to be measured as a player hears
+// it before the picture is copied over it once.
 async function encodeAac(samples, file) {
   await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-b:a", "192k", "-y", where(file)], samples);
 }

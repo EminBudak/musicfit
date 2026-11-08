@@ -381,17 +381,6 @@ async function duck(music, spans, depth) {
 
 // ─── loudness ──────────────────────────────────────────────────────────────
 
-async function interleave({ L, R }) {
-  const out = new Float32Array(L.length * 2);
-  await blocks(0, L.length, (from, to) => {
-    for (let i = from; i < to; i++) {
-      out[2 * i] = L[i];
-      out[2 * i + 1] = R[i];
-    }
-  });
-  return out;
-}
-
 async function scale({ L, R }, gain) {
   await blocks(0, L.length, (from, to) => {
     for (let i = from; i < to; i++) {
@@ -416,9 +405,11 @@ const PHASES = [0.25, 0.5, 0.75].map((frac) => {
   return k;
 });
 
-async function truePeaks(x) {
+// The true peak at each sample of `x`, or with `into`, the higher of that
+// and what `into` holds there already, for a second channel.
+async function truePeaks(x, into = null) {
   const n = x.length;
-  const out = new Float32Array(n);
+  const out = into || new Float32Array(n);
   await blocks(0, n, (from, to) => {
     for (let i = from; i < to; i++) {
       let peak = Math.abs(x[i]);
@@ -429,7 +420,7 @@ async function truePeaks(x) {
           if (Math.abs(v) > peak) peak = Math.abs(v);
         }
       }
-      out[i] = peak;
+      if (!into || peak > out[i]) out[i] = peak;
     }
   });
   return out;
@@ -443,31 +434,39 @@ async function truePeaks(x) {
 async function limit({ L, R }, ceiling) {
   const n = L.length;
   const ahead = Math.round(0.005 * RATE);
-  const pl = await truePeaks(L);
-  const pr = await truePeaks(R);
-  const need = new Float32Array(n);
+  // The higher true peak of the two channels at each sample, then the gain
+  // it needs. This one array is all the limiter keeps of the whole sound.
+  const need = await truePeaks(L);
+  await truePeaks(R, need);
   await blocks(0, n, (from, to) => {
     for (let i = from; i < to; i++) {
-      const peak = Math.max(pl[i], pr[i]);
+      const peak = need[i];
       need[i] = peak > ceiling ? ceiling / peak : 1;
     }
   });
   // The lowest need within [i, i + ahead], with a deque of minima, from the
-  // last sample to the first.
-  const lowest = new Float32Array(n);
-  const deque = new Int32Array(n);
+  // last sample to the first. The deque holds at most ahead + 2 samples, in
+  // a ring, each with its need, so need[i] becomes that lowest in place.
+  const size = 2 ** Math.ceil(Math.log2(ahead + 2));
+  const mask = size - 1;
+  const index = new Int32Array(size);
+  const value = new Float32Array(size);
   const ends = { head: 0, tail: 0 };
   for (let to = n; to > 0; to -= CHUNK) {
     await breathe();
     let { head, tail } = ends;
     for (let i = to - 1; i >= Math.max(0, to - CHUNK); i--) {
-      while (tail > head && need[deque[tail - 1]] >= need[i]) tail--;
-      deque[tail++] = i;
-      while (deque[head] > i + ahead) head++;
-      lowest[i] = need[deque[head]];
+      const mine = need[i];
+      while (tail > head && value[(tail - 1) & mask] >= mine) tail--;
+      index[tail & mask] = i;
+      value[tail & mask] = mine;
+      tail++;
+      while (index[head & mask] > i + ahead) head++;
+      need[i] = value[head & mask];
     }
     Object.assign(ends, { head, tail });
   }
+  const lowest = need;
   // Averaged over [i - ahead, i]: every value in that window covers sample
   // i, so the average is never above what sample i needs.
   const release = 1 - Math.exp(-1 / (0.08 * RATE));
@@ -491,17 +490,17 @@ async function limit({ L, R }, ceiling) {
 // only when that gain would push peaks over. A target too loud to reach
 // under the peak limit is left short of it rather than clipped.
 async function normalize(audio, { lufs, peak = -1 }) {
-  const before = await measure(await interleave(audio));
+  const before = await measure(audio);
   if (!Number.isFinite(before.integrated)) return { before, after: before, gain: 0, limited: false };
   const gain = lufs - before.integrated;
   await scale(audio, 10 ** (gain / 20));
   let after = { ...before, integrated: lufs, truePeak: before.truePeak + gain };
-  if (after.truePeak <= peak) return { before, after: await measure(await interleave(audio)), gain, limited: false };
+  if (after.truePeak <= peak) return { before, after: await measure(audio), gain, limited: false };
   let ceiling = peak - 0.3;
   let raised = true;
   for (let round = 0; round < 4; round++) {
     await limit(audio, 10 ** (ceiling / 20));
-    after = await measure(await interleave(audio));
+    after = await measure(audio);
     raised = false;
     if (after.truePeak > peak) {
       ceiling -= after.truePeak - peak + 0.1;
@@ -518,7 +517,7 @@ async function normalize(audio, { lufs, peak = -1 }) {
   for (let round = 0; round < 3 && (raised || after.truePeak > peak); round++) {
     if (after.truePeak > peak) ceiling -= after.truePeak - peak + 0.2;
     await limit(audio, 10 ** (ceiling / 20));
-    after = await measure(await interleave(audio));
+    after = await measure(audio);
     raised = false;
   }
   return { before, after, gain, limited: true };
@@ -564,4 +563,4 @@ async function setWhere(audio, spans, lufs) {
   return gain;
 }
 
-module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, setWhere, interleave, scale, attackNear };
+module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, setWhere, scale, attackNear };

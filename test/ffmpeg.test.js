@@ -110,3 +110,20 @@ test("the loudness meter is asked only for framelog values ffmpeg 4.4 has, in ev
   }
   assert.ok(asked > 0, "the meter is asked for no framelog value at all");
 });
+
+test("a stereo sound handed to ffmpeg a block at a time is the same sound as one interleaved copy of it", async () => {
+  const { decode, measure, encodeWav } = require("../skills/musicfit/scripts/lib/audio");
+  const whole = await decode(fixture("house").file);
+  const n = whole.length / 2;
+  const L = new Float32Array(n);
+  const R = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    L[i] = whole[2 * i];
+    R[i] = whole[2 * i + 1];
+  }
+  assert.deepEqual(await measure({ L, R }), await measure(whole));
+  const [a, b] = [outDir("blocks.wav"), outDir("whole.wav")];
+  await encodeWav({ L, R }, a);
+  await encodeWav(whole, b);
+  assert.ok(fs.readFileSync(a).equals(fs.readFileSync(b)));
+});
