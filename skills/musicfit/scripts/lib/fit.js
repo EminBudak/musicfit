@@ -112,7 +112,7 @@ async function readVideo(track, o) {
   const video = { picture, sound, same, own: null, spans: [] };
   if (sound === "drop" || sound === "none") return video;
   o.log && o.log(`Reading ${picture.name}'s own sound`);
-  const own = await ownSound(o.video, Math.round(o.length * RATE));
+  const own = await ownSound(o.video, Math.round(o.length * RATE), picture.start);
   if (!own) return { ...video, sound: "none" };
   const spans = speech(own);
   // A sound that never goes quiet, like a music bed, plays all the way
@@ -191,7 +191,7 @@ async function make(track, options, run, video) {
   if (options.voice) {
     log(`Ducking under ${path.basename(options.voice)}`);
     // The voice that is the video's own sound is read on its timeline.
-    v = split(await decode(options.voice, { rate: RATE, channels: 2, timeline: Boolean(video && video.same === "voice") }));
+    v = split(await decode(options.voice, { rate: RATE, channels: 2, from: video && video.same === "voice" ? video.picture.start : null }));
     spoken = { L: new Float32Array(n), R: new Float32Array(n) };
     spoken.L.set(v.L.subarray(0, n));
     spoken.R.set(v.R.subarray(0, n));
@@ -251,7 +251,7 @@ async function make(track, options, run, video) {
     await normalize(under, { lufs: options.lufs });
     const m4a = run.scratch("sound.m4a");
     const level = await aac(under, m4a, options.lufs);
-    await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version) });
+    await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version), start: picture.start });
     laid = { ...picture, sound: video.sound, same: video.same, duck: depth, spans: video.spans, loudness: level };
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
   }

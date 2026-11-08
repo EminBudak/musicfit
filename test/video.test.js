@@ -378,7 +378,7 @@ test("frames count at the video's rate without --fps, another --fps is noted, an
   assert.match(seconds.stdout, /Note {4}vfr\.mp4 has no steady frame rate, so the frames in cues\.json count at its average, 25\.75 fps\./);
 });
 
-test("a 29.97 fps video counts at 29.97, even in a timebase of whole milliseconds", async () => {
+test("a 29.97 fps video counts at 29.97 and a 30 fps one at 30, even in a timebase of whole milliseconds", async () => {
   const { probe, fpsText } = require("../skills/musicfit/scripts/lib/video");
   for (const ext of ["mp4", "mkv"]) {
     const info = await probe(film(`ntsc-${ext}`, { fps: "30000/1001", ext }));
@@ -386,6 +386,16 @@ test("a 29.97 fps video counts at 29.97, even in a timebase of whole millisecond
     assert.ok(Math.abs(info.fps - 30000 / 1001) < 1e-9, `${ext}: ${info.fps}`);
     assert.equal(fpsText(info.fps), "29.97");
   }
+  // 30 fps in milliseconds steps 33, 33 and 34, which comes out 29.999.
+  const thirty = await probe(film("thirty-mkv", { fps: 30, ext: "mkv" }));
+  assert.ok(thirty.constant);
+  assert.equal(thirty.fps, 30);
+  // Copied into a finer timebase, it keeps those steps and is still steady.
+  const copied = at("thirty-copied.mp4");
+  ffmpeg(["-i", film("thirty-mkv", { fps: 30, ext: "mkv" }), "-c", "copy", copied]);
+  const again = await probe(copied);
+  assert.ok(again.constant);
+  assert.equal(again.fps, 30);
 });
 
 test("an HEVC picture is tagged hvc1 in video.mp4, so Apple's players take it", { skip: !/libx265/.test(spawnSync(FFMPEG, ["-hide_banner", "-encoders"], { encoding: "utf8" }).stdout) && "this ffmpeg has no HEVC encoder" }, () => {
@@ -492,4 +502,63 @@ test("a whole video whose name or tags hold the words ffmpeg prints for a damage
   }
   const run = cli([fixture("house").file, "--length", "12", "--video", named, "--out", at("partial-file-fit")]);
   assert.equal(run.status, 0, run.stderr);
+});
+
+test("a picture that starts after the top of its file, as in a fragmented MP4 with B-frames, is measured from its first frame, and in video.mp4 it starts with the sound", async () => {
+  const { probe } = require("../skills/musicfit/scripts/lib/video");
+  // mpeg4 with B-frames, written in fragments with no edit list: the
+  // picture starts a frame after the sound.
+  const frag = film("frag-bframes", { sound: effects(), codec: ["-c:v", "mpeg4", "-q:v", "6", "-bf", "2", "-movflags", "frag_keyframe+empty_moov"] });
+  const info = await probe(frag);
+  assert.ok(info.start > 0.03, `the picture starts at ${info.start} s`);
+  assert.deepEqual([info.seconds, info.frames, info.fps], [12, 300, 25]);
+  for (const length of ["12", "300f"]) {
+    const out = at(`frag-fit-${length}`);
+    const run = cli([fixture("house").file, "--length", length, "--hit", "8", "--video", frag, "--video-sound", "keep", "--out", out]);
+    assert.equal(run.status, 0, run.stderr);
+    const c = cuesOf(out);
+    assert.deepEqual([c.frames, c.video.frames, c.video.length], [300, 300, 12]);
+    // Its own sound is read from the first frame: the effect at 2 s of the
+    // file plays a frame earlier on the picture.
+    assert.ok(Math.abs(c.video.spans[0].from - (2 - info.start)) < 0.05, JSON.stringify(c.video.spans));
+    assert.deepEqual(packets(path.join(out, "video.mp4")), packets(frag));
+    // In video.mp4 the first frame is at 0, and the sound lines up with it.
+    const made = await probe(path.join(out, "video.mp4"));
+    assert.ok(Math.abs(made.start) < 0.001, `video.mp4's picture starts at ${made.start} s`);
+    const music = mono(await decode(path.join(out, "fitted.wav")));
+    const under = mono(await decode(path.join(out, "video.mp4"), { from: made.start }));
+    assert.ok(Math.abs(lag(music, under, 4, 6)) <= 96, `video.mp4's sound is ${lag(music, under, 4, 6)} samples off`);
+  }
+});
+
+test("an MPEG-TS whose sound starts before its picture keeps that sound where it was against the picture", () => {
+  const ts = at("early.ts");
+  if (!fs.existsSync(ts)) ffmpeg(["-itsoffset", "0.5", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-i", speech(), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "mpeg4", "-q:v", "6", "-c:a", "aac", ts]);
+  const out = at("early-ts-fit");
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", ts, "--video-sound", "voice", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const c = cuesOf(out);
+  assert.equal(c.video.length, 12);
+  // speech.wav speaks from 2 s, and its sound comes about half a second
+  // before the picture: about 1.5 s into the picture.
+  assert.ok(Math.abs(c.video.spans[0].from - 1.5) < 0.12, JSON.stringify(c.video.spans));
+});
+
+test("a video cut without encoding again, whose first shown frame needs frames from before the cut, is read from that frame, and video.mp4 shows it at 0", async () => {
+  const { probe } = require("../skills/musicfit/scripts/lib/video");
+  const whole = film("gop16", { seconds: 16, codec: ["-c:v", "mpeg4", "-q:v", "6", "-g", "50", "-bf", "2"] });
+  const cut = at("gop-cut.mp4");
+  ffmpeg(["-ss", "1.5", "-i", whole, "-t", "12", "-c", "copy", cut]);
+  const info = await probe(cut);
+  // The frames before the cut are in the file, flagged so no player shows them.
+  const all = ffmpeg(["-i", cut, "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"]).stdout.split("\n").filter((l) => /^\d/.test(l)).length;
+  assert.ok(info.frames < all, `${info.frames} of ${all} packets counted`);
+  assert.ok(Math.abs(info.start) < 0.001, `the picture starts at ${info.start} s`);
+  const out = at("gop-cut-fit");
+  const run = cli([fixture("house").file, "--length", String(Number(info.seconds.toFixed(3))), "--video", cut, "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const made = await probe(path.join(out, "video.mp4"));
+  assert.ok(Math.abs(made.start) < 0.001, `video.mp4's first shown frame is at ${made.start} s`);
+  const first = (file) => ffmpeg(["-i", file, "-map", "0:v:0", "-frames:v", "1", "-f", "framemd5", "pipe:1"]).stdout.split("\n").find((l) => /^\d/.test(l)).split(",").pop().trim();
+  assert.equal(first(path.join(out, "video.mp4")), first(cut));
 });

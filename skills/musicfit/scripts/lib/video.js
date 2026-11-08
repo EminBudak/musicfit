@@ -4,6 +4,12 @@
 // timeline; and the fitted sound laid under its picture, which is copied
 // packet for packet and never encoded again. Every call goes through the
 // same ffmpeg (FFMPEG_PATH), and none needs ffprobe.
+//
+// The video is read on its own timestamps (-copyts), the same in every
+// call: ffmpeg would otherwise start each call's streams at 0 by its own
+// rule, which in an MPEG-TS or a fragmented MP4 moves the picture against
+// the sound. Everything here counts from the picture's first frame, and in
+// video.mp4 that frame and the sound both start at 0.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -15,10 +21,13 @@ const num = (x, digits) => String(Number(x.toFixed(digits)));
 const fpsText = (fps) => num(fps, 3);
 
 // The usual frame rates. A steady rate read from a timebase in whole
-// milliseconds comes out a hair off (29.969 for 29.97): within a tenth of a
-// percent of one of these, it is that one.
+// milliseconds comes out a hair off (29.969 for 29.97, 29.999 for 30):
+// within a tenth of a percent of one of these, it is the nearest of them.
 const RATES = [24000 / 1001, 24, 25, 30000 / 1001, 30, 48000 / 1001, 48, 50, 60000 / 1001, 60, 100, 120000 / 1001, 120, 144, 240];
-const nominal = (fps) => RATES.find((rate) => Math.abs(fps - rate) < rate * 0.001) || fps;
+function nominal(fps) {
+  const near = RATES.filter((rate) => Math.abs(fps - rate) < rate * 0.001).sort((a, b) => Math.abs(fps - a) - Math.abs(fps - b));
+  return near.length ? near[0] : fps;
+}
 
 // The comment musicfit writes in video.mp4, so a video it made is known
 // when it is given back as --video. It names no file: the video goes out
@@ -59,7 +68,7 @@ async function probe(file) {
   let crc;
   let said;
   try {
-    const { chunks, stderr } = await run(["-v", "info", "-nostats", "-i", where(file), "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"]);
+    const { chunks, stderr } = await run(["-v", "info", "-nostats", "-copyts", "-i", where(file), "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"]);
     crc = Buffer.concat(chunks).toString("utf8");
     said = stderr;
   } catch (err) {
@@ -82,22 +91,30 @@ async function probe(file) {
   const head = input.slice(0, Math.max(0, input.search(/^\s*Duration:/m)));
   const comment = (/^\s*comment\s*:\s?(.*)$/im.exec(head) || [])[1] || "";
 
-  // framecrc lists each packet as: stream, dts, pts, duration, size, crc.
+  // framecrc lists each packet as: stream, dts, pts, duration, size, crc,
+  // and its flags when they are more than a key frame's. A packet flagged
+  // to be dropped (0x4) is never shown: an MP4 cut without encoding again
+  // keeps the frames before the cut that its first shown frame needs, and
+  // an edit list hides them.
   const tb = /^#tb 0: (\d+)\/(\d+)/m.exec(crc);
   const unit = tb ? Number(tb[1]) / Number(tb[2]) : 0;
   let frames = 0;
   const packets = [];
   for (const line of crc.split("\n")) {
     if (!/^\d/.test(line)) continue;
+    const fields = line.split(",").map((s) => s.trim());
+    const flags = fields.map((f) => /^F=0x([0-9a-f]+)$/i.exec(f)).find(Boolean);
+    if (flags && parseInt(flags[1], 16) & 4) continue;
     frames++;
-    const [, dts, pts, duration] = line.split(",").map((s) => Number(s.trim()));
+    const [, dts, pts, duration] = fields.map(Number);
     const at = pts > -1e15 ? pts : dts > -1e15 ? dts : NaN;
     if (Number.isFinite(at)) packets.push({ at, duration });
   }
   // The step from frame to frame: the middle one of the gaps between their
   // times, else of their durations. The rate holds steady when every gap
-  // is that step, give or take a tick of the timebase (a 29.97 fps video
-  // in a millisecond timebase steps 33 and 34).
+  // is that step, give or take a tick of the timebase or a millisecond (a
+  // 29.97 fps video in a millisecond timebase steps 33 and 34, and keeps
+  // those steps when it is copied into a finer one).
   const times = packets.map((p) => p.at).sort((a, b) => a - b);
   const gaps = times.slice(1).map((t, i) => t - times[i]).filter((d) => d > 0);
   const durations = packets.map((p) => p.duration).filter((d) => d > 0);
@@ -109,18 +126,20 @@ async function probe(file) {
     first = Math.min(first, p.at);
     last = Math.max(last, p.at + (p.duration > 0 ? p.duration : step));
   }
+  // Where the picture starts on the video's timeline, and how long it is
+  // from its first frame.
   const start = Number.isFinite(first) ? first * unit : 0;
-  const seconds = Number.isFinite(last) ? last * unit : 0;
+  const seconds = Number.isFinite(last) ? (last - first) * unit : 0;
   // What ffmpeg said as it read the packets, without the file's header,
   // where its name and its tags are.
   const reading = said.includes("Input #0") ? said.replace(input, "") : said;
   if (DAMAGED.some((line) => line.test(reading))) {
     const d = /^\s*Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)/m.exec(input);
     const whole = d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0;
-    throw new Error(`Cannot read ${file}: it is cut short or damaged (ffmpeg could read ${frames} ${frames === 1 ? "frame" : "frames"}, ${(seconds - start).toFixed(2)} s${whole > seconds - start + 0.05 ? ` of the ${whole.toFixed(2)} s it says it holds` : ""})`);
+    throw new Error(`Cannot read ${file}: it is cut short or damaged (ffmpeg could read ${frames} ${frames === 1 ? "frame" : "frames"}, ${seconds.toFixed(2)} s${whole > seconds + 0.05 ? ` of the ${whole.toFixed(2)} s it says it holds` : ""})`);
   }
-  if (frames <= 1 || /^(image2|image2pipe|\w+_pipe)$/.test(format) || !(seconds > start) || !step) throw new Error(`${name} is a still picture, not a video`);
-  const constant = gaps.every((g) => Math.abs(g - step) <= Math.max(1, step * 0.01));
+  if (frames <= 1 || /^(image2|image2pipe|\w+_pipe)$/.test(format) || !(seconds > 0) || !step) throw new Error(`${name} is a still picture, not a video`);
+  const constant = gaps.every((g) => Math.abs(g - step) <= Math.max(1, step * 0.01, 0.0011 / unit));
 
   try {
     await run(["-v", "error", "-i", where(file), "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+delay_moov", "pipe:1"]);
@@ -139,7 +158,7 @@ async function probe(file) {
     seconds,
     start,
     frames,
-    fps: constant && span > 0 ? nominal((times.length - 1) / span) : frames / (seconds - start),
+    fps: constant && span > 0 ? nominal((times.length - 1) / span) : frames / seconds,
     constant,
     picture: (/: Video: (\w+)/.exec(pictureLine) || [])[1] || "unknown",
     sound: soundLine ? (/: Audio: (\w+)/.exec(soundLine) || [])[1] || "unknown" : null,
@@ -153,19 +172,19 @@ async function probe(file) {
 function fits(info, length, fps) {
   if (Math.abs(info.seconds - length) <= 1 / info.fps + 1e-6) return;
   let frames = "";
-  // In frames too, when they mean one moment: a steady rate, from the top.
-  if (info.constant && info.start < 0.5 / info.fps) frames = `, or ${info.frames}f${Math.abs(fps - info.fps) > info.fps * 0.0005 ? ` with --fps ${fpsText(info.fps)}` : ""}`;
+  // In frames too, when they mean one moment: at a steady rate.
+  if (info.constant) frames = `, or ${info.frames}f${Math.abs(fps - info.fps) > info.fps * 0.0005 ? ` with --fps ${fpsText(info.fps)}` : ""}`;
   const counted = info.constant ? ` (${info.frames} frames at ${fpsText(info.fps)} fps)` : "";
   throw new Error(`${info.name} is ${info.seconds.toFixed(2)} s long${counted} and --length is ${length.toFixed(2)} s: give --length ${num(info.seconds, 3)}${frames}`);
 }
 
-// The video's own sound on its timeline, as { L, R } exactly `n` samples
-// long, and how many seconds of it ran past that and were cut; null when
-// it has none.
-async function ownSound(file, n) {
+// The video's own sound on its timeline from `start`, where its picture
+// starts, as { L, R } exactly `n` samples long, and how many seconds of it
+// ran past that and were cut; null when it has none.
+async function ownSound(file, n, start) {
   let x;
   try {
-    x = await decode(file, { rate: RATE, channels: 2, timeline: true });
+    x = await decode(file, { rate: RATE, channels: 2, from: start });
   } catch (err) {
     if (/has no audio/.test(err.message)) return null;
     throw err;
@@ -187,13 +206,14 @@ async function encodeAac(samples, file) {
 }
 
 // The video's picture, copied packet for packet, over `sound` (an .m4a),
-// copied too, in an MP4 that plays as it downloads. `comment` replaces the
-// video's own comment tag, so a mark another tool left there (voiceoverfit
-// marks its files so) is not carried over to a file it did not make. HEVC
-// is tagged hvc1, the tag QuickTime, Safari and iOS play.
-async function mux(file, sound, out, { picture, comment }) {
+// copied too, in an MP4 that plays as it downloads. The picture is moved
+// by `start`, so its first frame is at 0 with the sound. `comment` replaces
+// the video's own comment tag, so a mark another tool left there
+// (voiceoverfit marks its files so) is not carried over to a file it did
+// not make. HEVC is tagged hvc1, the tag QuickTime, Safari and iOS play.
+async function mux(file, sound, out, { picture, comment, start }) {
   const tag = picture === "hevc" ? ["-tag:v", "hvc1"] : [];
-  await run(["-v", "error", "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)]);
+  await run(["-v", "error", "-copyts", "-itsoffset", (-start).toFixed(6), "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)]);
 }
 
 module.exports = { probe, fits, ownSound, encodeAac, mux, mark, fpsText };
