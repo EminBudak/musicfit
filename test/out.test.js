@@ -432,20 +432,26 @@ test("a stop while the track is analysed is heard at once, as the analysis has a
 test("no stretch of a long fit holds the main thread long enough to keep a stop waiting", async () => {
   const { fit } = require("../skills/musicfit/scripts/lib/fit");
   const folder = outDir("held");
-  let last = Date.now();
+  // Made first: making the track is the test's work, not the run's.
+  const track = fixture("house").file;
+  // The time the main thread itself works between two turns of a timer, so
+  // a machine busy with other work, which only makes the turns come late,
+  // does not count. Node 22 before 22.19 tells only the time that passed.
+  const spent = process.threadCpuUsage ? () => (({ user, system }) => (user + system) / 1000)(process.threadCpuUsage()) : () => Date.now();
+  let last = spent();
   let longest = 0;
   const timer = setInterval(() => {
-    const now = Date.now();
+    const now = spent();
     longest = Math.max(longest, now - last);
     last = now;
   }, 5);
   try {
-    await fit(fixture("house").file, { length: 600, hit: 300, out: folder, fps: 30, duck: 10, lufs: -14, end: "auto", warnings: [] });
+    await fit(track, { length: 600, hit: 300, out: folder, fps: 30, duck: 10, lufs: -14, end: "auto", warnings: [] });
   } finally {
     clearInterval(timer);
   }
   // In one go, the work on ten minutes of sound held it for a second at a time.
-  assert.ok(longest < 500, `held for ${longest} ms`);
+  assert.ok(longest < 500, `held for ${longest.toFixed(0)} ms`);
 });
 
 test("while a track is analysed the run is free to hear a stop: the analysis has a thread of its own", async () => {
