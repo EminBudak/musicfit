@@ -159,22 +159,26 @@ async function readVideo(track, o) {
 // A number of decibels as written: 5, 7.5.
 const num = (x) => String(Math.round(x * 10) / 10);
 
-// AAC can lift a true peak over the -1 dBTP the sound was held to. So the
-// sound is encoded on its own and measured as a player decodes it, and
-// while its true peak is over, it is limited again at the same loudness
-// with the ceiling lowered by as much and encoded again, four times at
-// most. Returns the last measurement.
+// AAC can lift a true peak over the -1 dBTP the sound was held to, and by
+// another amount each time the sound is encoded. So the sound is encoded on
+// its own and measured as a player decodes it, and while its true peak is
+// over, it is limited again at the same loudness with the ceiling lowered
+// by as much and encoded again, four times at most. The encoding with the
+// lowest true peak is the one kept, as `file`. Returns its measurement.
 async function aac(sound, file, lufs) {
   let ceiling = -1;
-  let m;
+  let best = null;
   for (let round = 0; round < 4; round++) {
     if (round) await normalize(sound, { lufs, peak: ceiling });
-    await encodeAac(sound, file);
-    m = await measureFile(file);
+    const at = `${file}.${round}.m4a`;
+    await encodeAac(sound, at);
+    const m = await measureFile(at);
+    if (!best || m.truePeak < best.m.truePeak) best = { at, m };
     if (!(m.truePeak > -1)) break;
     ceiling -= m.truePeak + 1 + 0.1;
   }
-  return m;
+  fs.renameSync(best.at, file);
+  return best.m;
 }
 
 // The run's work, its files written with run.file(name). A long fit holds a

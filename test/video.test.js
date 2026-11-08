@@ -149,6 +149,9 @@ test("--video writes video.mp4: the picture packet for packet, the fitted track 
   assert.ok(loudness.truePeak <= -1, `true peak ${loudness.truePeak} dBTP`);
   // The mark names no file: the track's and the video's names stay the user's.
   assert.match(said(path.join(out, "video.mp4")), /comment\s*: musicfit \S+: a fitted track laid under this picture\n/);
+  // AAC at 256 kb/s, where its noise lifts a true peak by a few tenths at most.
+  const rate = /Audio: aac \(LC\).*, (\d+) kb\/s/.exec(said(path.join(out, "video.mp4")));
+  assert.ok(rate && Number(rate[1]) >= 230, rate && rate[0]);
 
   // With keep the music dips 5 dB where an effect plays and nowhere else,
   // and in video.mp4 the bar after the hit, where an effect plays on the
@@ -600,6 +603,21 @@ test("an AAC that lifts the true peak over -1 dBTP is limited again and encoded 
   const c = cuesOf(out);
   assert.ok(c.video.loudness.truePeak <= -1, `true peak ${c.video.loudness.truePeak} dBTP`);
   assert.deepEqual(c.warnings.filter((w) => /AAC/.test(w)), []);
+});
+
+test("of AAC encodings whose true peaks come out higher and lower each time, the lowest is the one video.mp4 keeps", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const state = at(`erratic-${process.hrtime.bigint()}`);
+  const out = at("erratic-fit");
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", out], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "erraticaac", "ffmpeg"), MUSICFIT_TEST_STATE: state, MUSICFIT_TEST_PEAKS: "-0.5 0.4 -0.8 -0.2" } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(fs.readFileSync(state, "utf8").trim(), "4");
+  const c = cuesOf(out);
+  assert.equal(c.video.loudness.truePeak, -0.8);
+  assert.deepEqual(c.warnings.filter((w) => /AAC/.test(w)), ["After the AAC encoding the true peak of video.mp4 is -0.8 dBTP, over -1 dBTP."]);
+  // video.mp4 holds the third encoding's packets.
+  const kept = ffmpeg(["-i", path.join(out, "video.mp4"), "-map", "0:a", "-c", "copy", "-f", "framecrc", "pipe:1"]).stdout.split("\n").filter((l) => /^\d/.test(l));
+  assert.deepEqual(kept, fs.readFileSync(`${state}.3`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
+  assert.notDeepEqual(kept, fs.readFileSync(`${state}.4`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
 });
 
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {

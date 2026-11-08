@@ -219,9 +219,13 @@ async function ownSound(file, n, start) {
 }
 
 // The sound as AAC in an .m4a of its own, to be measured as a player hears
-// it before the picture is copied over it once.
+// it before the picture is copied over it once. At 256 kb/s: at 192 the
+// encoder's noise around a sharp sound lifted the true peak by up to 1.1 dB
+// in the study's films, and by another amount each time the sound was
+// encoded again, up to 2.4 dB, so a sound limited further could come out
+// higher; at 256 it lifted it by half a dB at most but once, by 1 dB.
 async function encodeAac(samples, file) {
-  await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-b:a", "192k", "-y", where(file)], samples);
+  await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-b:a", "256k", "-y", where(file)], samples);
 }
 
 // The video's picture, copied packet for packet, over `sound` (an .m4a),
