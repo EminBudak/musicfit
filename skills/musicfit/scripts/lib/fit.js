@@ -125,9 +125,9 @@ async function readVideo(track, o) {
   // through even where speech() hears no more than a steady floor.
   const plays = (await floorOf(own)) > -40 ? o.length : seconds(spans);
   if (sound === undefined && plays > 0) {
-    throw new Error(`${picture.name} has sound of its own for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay at their level, the music dips ${num(o.duck / 2)} dB under them), voice for speech (set to ${o.lufs} LUFS, the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
+    throw new Error(`${picture.name} has sound of its own for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay, turned down to ${o.lufs} LUFS if they are louder, and the music dips ${num(o.duck / 2)} dB under them), voice for speech (set to ${o.lufs} LUFS, the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
   }
-  // Silence, or a faint room tone the music covers, stays as it is.
+  // Silence, or a faint room tone the music covers, is kept.
   sound = sound || "keep";
   if (own.over > 0.05) o.warnings.push(`${picture.name}'s own sound runs ${own.over.toFixed(2)} s past the end and was cut there.`);
   const dipped = seconds(spans);
@@ -234,10 +234,11 @@ async function make(track, options, run, video) {
     const { picture, own } = video;
     log(`Laying it under ${picture.name}`);
     // What plays under the picture, cut or padded to it: the music as it
-    // dips, the voice, and the video's own sound. With keep that sound
-    // stays at its own level, only lowered when it is louder than the
-    // target, so a faint room tone is never raised; with voice it is set
-    // to the target like a voice.
+    // dips, the voice, and the video's own sound. With keep that sound is
+    // only turned down, to the target when it is louder, so a faint room
+    // tone stays faint against the music; with voice it is set to the
+    // target like a voice. Then the whole is set to the target, which can
+    // move the video's own sound a few dB either way.
     const total = Math.round(picture.seconds * RATE);
     const under = { L: new Float32Array(total), R: new Float32Array(total) };
     const add = (x) =>

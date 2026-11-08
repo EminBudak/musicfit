@@ -128,13 +128,13 @@ function plain() {
   return plainFit;
 }
 
-test("--video writes video.mp4: the picture packet for packet, the fitted track lined up with it, its own sound kept at its level with the music dipping half of --duck under it, at --lufs with the true peak at or under -1 dBTP", async () => {
+test("--video writes video.mp4: the picture packet for packet, the fitted track lined up with it, its own sound kept with the music dipping half of --duck under it, at --lufs with the true peak at or under -1 dBTP", async () => {
   const video = film("film25", { sound: effects() });
   const out = at("film25-fit");
   const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", video, "--video-sound", "keep", "--out", out]);
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(fs.readdirSync(out).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png", "video.mp4"]);
-  assert.match(run.stdout, /\n {2}Video {3}video\.mp4 is film25\.mp4 with the music and its own sound at its own level, the music dipping 5 dB under it in 2 places; -1[34]\.\d LUFS, true peak -[\d.]+ dBTP\n/);
+  assert.match(run.stdout, /\n {2}Video {3}video\.mp4 is film25\.mp4 with the music and its own sound, the music dipping 5 dB under it in 2 places; -1[34]\.\d LUFS, true peak -[\d.]+ dBTP\n/);
 
   const c = cuesOf(out);
   // Without --fps the frames count at the video's rate.
@@ -210,7 +210,7 @@ test("a video with sound of its own is refused until --video-sound says what bec
     const out = at(`${name}-ask`);
     const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", video, "--out", out]);
     assert.equal(run.status, 1, `${name}: ${run.stderr}`);
-    assert.match(run.stderr, new RegExp(`musicfit: ${name}\\.mp4 has sound of its own for ${plays.source} of its 12\\.0 s, so say what becomes of it with --video-sound: keep for sound effects \\(they stay at their level, the music dips 5 dB under them\\), voice for speech \\(set to -14 LUFS, the music dips 10 dB under it\\), or drop for music of its own \\(left out\\)\\n$`));
+    assert.match(run.stderr, new RegExp(`musicfit: ${name}\\.mp4 has sound of its own for ${plays.source} of its 12\\.0 s, so say what becomes of it with --video-sound: keep for sound effects \\(they stay, turned down to -14 LUFS if they are louder, and the music dips 5 dB under them\\), voice for speech \\(set to -14 LUFS, the music dips 10 dB under it\\), or drop for music of its own \\(left out\\)\\n$`));
     assert.doesNotMatch(run.stderr, /Reading house\.wav/);
     assert.ok(!fs.existsSync(out), `${name} made ${out}`);
   }
@@ -219,7 +219,7 @@ test("a video with sound of its own is refused until --video-sound says what bec
   assert.match(kept.stdout, /Note {4}bed25\.mp4's own sound plays for 1[12]\.\d of its 12\.0 s, along with the music\. If that sound is music of its own, --video-sound drop leaves it out\./);
 });
 
-test("a faint room tone the video has is kept at its own level, never raised to --lufs", async () => {
+test("a faint room tone the video has stays faint against the music, never raised to --lufs", async () => {
   const hiss = wav("hiss", 12, (x) => {
     let seed = 3;
     for (let i = 0; i < x.length; i++) {

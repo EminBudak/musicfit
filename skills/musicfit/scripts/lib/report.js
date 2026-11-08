@@ -306,9 +306,9 @@ function underVideo(c) {
   if (v.same === "track") return "the music fitted from its own sound, in place of that sound";
   // The music, the voice when there is one, and the video's own sound.
   const all = c.voice ? "the music, the voice and its own sound" : "the music and its own sound";
-  if (v.sound === "keep" && !v.spans.length) return `${all} at its own level`;
-  if (v.sound === "keep" && c.voice) return `${all} at its own level, the music dipping ${c.voice.duck} dB under the voice and ${v.duck} dB under its own sound`;
-  if (v.sound === "keep") return `${all} at its own level, the music dipping ${v.duck} dB under it in ${places(v.spans.length)}`;
+  if (v.sound === "keep" && !v.spans.length) return all;
+  if (v.sound === "keep" && c.voice) return `${all}, the music dipping ${c.voice.duck} dB under the voice and ${v.duck} dB under its own sound`;
+  if (v.sound === "keep") return `${all}, the music dipping ${v.duck} dB under it in ${places(v.spans.length)}`;
   if (v.sound === "voice" && !v.spans.length) return `${all}, which had no speech for the music to dip under`;
   if (v.sound === "voice") return `its own sound${voice}, the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
   if (v.sound === "drop") return `the music${voice} in place of its own sound`;
