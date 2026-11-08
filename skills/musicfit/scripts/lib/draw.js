@@ -196,6 +196,7 @@ const INK = {
   seam: "#ff6a3d",
   hit: "#ff6a3d",
   voice: "#4cc9f0",
+  own: "#c77dff",
 };
 const SEGMENT = ["#7b6cff", "#2ec4b6", "#ffbe0b", "#f15bb5", "#9ef01a", "#4cc9f0"];
 
@@ -227,6 +228,21 @@ function ruler(c, x0, width, y, seconds, scale) {
   }
 }
 
+// The words under the picture of a fit: a mark for each kind of line or
+// span drawn on it, then what the colors mean.
+const NOTE = "COLORS MATCH EACH PART OF THE TRACK TO WHERE IT PLAYS";
+
+function legendOf(cues) {
+  const marks = [[INK.seam, "SEAM"], ["#ffffff", "HIT"]];
+  if (cues.voice) marks.push([INK.voice, "VOICE (MUSIC DUCKED)"]);
+  if (ownSpans(cues).length) marks.push([INK.own, "VIDEO'S OWN SOUND (MUSIC DIPPED)"]);
+  return marks;
+}
+
+// Where the music dips under the video's own sound, with --video-sound keep
+// or voice.
+const ownSpans = (cues) => (cues.video && cues.video.duck !== null && cues.video.spans) || [];
+
 // cues: what report.cues() returns; source, fitted: { L, R } at `rate`.
 async function seamsPng({ cues, source, fitted, rate, analysis }) {
   const W = 1600;
@@ -236,7 +252,11 @@ async function seamsPng({ cues, source, fitted, rate, analysis }) {
   const topY = 96;
   const mapH = 110;
   const fitY = topY + stripH + 34 + mapH;
-  const H = fitY + stripH + 34 + 64;
+  // The note goes on a line of its own when the marks leave it no room.
+  const marks = cues.mode === "analysis" ? [] : legendOf(cues);
+  const width = (text) => String(text).length * 12 - 2;
+  const wrap = marks.reduce((x, [, label]) => x + 26 + width(label) + 30, pad) + width(NOTE) > W - pad;
+  const H = fitY + stripH + 34 + 64 + (wrap ? 22 : 0);
   const c = canvas(W, H, INK.ground);
 
   const srcSeconds = source.L.length / rate;
@@ -302,8 +322,11 @@ async function seamsPng({ cues, source, fitted, rate, analysis }) {
   };
   await drawStrip(fitY, outSeconds, ox, fitted.L, fitted.R, fitColor, "FIT");
   cues.times.bars.forEach((t, i) => c.vline(pad + t * ox, fitY + 30, fitY + stripH, INK.grid, i % 4 === 0 ? 0.9 : 0.45));
-  // Voice spans along the bottom of the strip.
+  // Voice spans along the bottom of the strip, and above them where the
+  // music dips under the video's own sound.
   for (const span of (cues.voice && cues.voice.spans) || []) c.rect(pad + span.from * ox, fitY + stripH - 6, (span.to - span.from) * ox, 6, INK.voice, 0.85);
+  const ownY = fitY + stripH - (cues.voice ? 12 : 6);
+  for (const span of ownSpans(cues)) c.rect(pad + span.from * ox, ownY, Math.max(1, (span.to - span.from) * ox), 6, INK.own, 0.85);
   // The closing fade, darker towards its end.
   if (cues.end && cues.end.fade) {
     const { from, to } = cues.end.fade;
@@ -333,16 +356,13 @@ async function seamsPng({ cues, source, fitted, rate, analysis }) {
 
   // The legend.
   let lx = pad;
-  const ly = H - 34;
-  c.rect(lx, ly + 3, 18, 8, INK.seam);
-  lx = c.text(lx + 26, ly, "SEAM", INK.text, 2) + 30;
-  c.rect(lx, ly + 3, 18, 8, "#ffffff");
-  lx = c.text(lx + 26, ly, "HIT", INK.text, 2) + 30;
-  if (cues.voice) {
-    c.rect(lx, ly + 3, 18, 8, INK.voice);
-    lx = c.text(lx + 26, ly, "VOICE (MUSIC DUCKED)", INK.text, 2) + 30;
+  const ly = H - 34 - (wrap ? 22 : 0);
+  for (const [color, label] of marks) {
+    c.rect(lx, ly + 3, 18, 8, color);
+    lx = c.text(lx + 26, ly, label, INK.text, 2) + 30;
   }
-  c.text(lx, ly, "COLORS MATCH EACH PART OF THE TRACK TO WHERE IT PLAYS", INK.dim, 2);
+  if (wrap) c.text(pad, ly + 22, NOTE, INK.dim, 2);
+  else c.text(lx, ly, NOTE, INK.dim, 2);
   return png(c, { Software: "musicfit" });
 }
 

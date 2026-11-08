@@ -323,6 +323,45 @@ test("a video whose only sounds are short clicks is asked about, keep dips the m
   assert.match(spoken.stdout, /Note {4}No speech was found in clicks\.mp4's own sound, so the music does not dip under it, and it is not raised: it is only turned down if it is louder than -14 LUFS\./);
 });
 
+// seams.png's pixels: musicfit writes 8-bit RGB rows, each filtered against
+// the pixel to its left.
+function pixels(file) {
+  const png = fs.readFileSync(file);
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const data = [];
+  for (let at = 8; at < png.length; ) {
+    const size = png.readUInt32BE(at);
+    if (png.toString("latin1", at + 4, at + 8) === "IDAT") data.push(png.subarray(at + 8, at + 8 + size));
+    at += 12 + size;
+  }
+  const raw = require("node:zlib").inflateSync(Buffer.concat(data));
+  const stride = width * 3;
+  const px = Buffer.alloc(height * stride);
+  for (let y = 0; y < height; y++) {
+    assert.equal(raw[y * (stride + 1)], 1);
+    for (let x = 0; x < stride; x++) px[y * stride + x] = (raw[y * (stride + 1) + 1 + x] + (x >= 3 ? px[y * stride + x - 3] : 0)) & 0xff;
+  }
+  return { width, height, at: (x, y) => [...px.subarray((y * width + x) * 3, (y * width + x) * 3 + 3)] };
+}
+
+test("seams.png marks where the music dips under the video's own sound, and names it under the picture", () => {
+  const out = at("film25-png");
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", film("film25", { sound: effects() }), "--video-sound", "keep", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const spans = cuesOf(out).video.spans;
+  assert.equal(spans.length, 2);
+  const image = pixels(path.join(out, "seams.png"));
+  // The marks sit along the bottom of the strip of the fit, 128 pixels to
+  // the second from x 32, in #c77dff over the dark panel.
+  const marked = (x) => [534, 537].every((y) => image.at(x, y).every((v, i) => Math.abs(v - [173, 110, 221][i]) <= 8));
+  for (const { from, to } of spans) assert.ok(marked(Math.round(32 + ((from + to) / 2) * 128)), `no mark at ${from} to ${to} s`);
+  assert.ok(!marked(Math.round(32 + 5 * 128)), "a mark where nothing plays");
+  // The legend's mark for them, in the line under the picture.
+  const legend = image.height - 34 + 7;
+  assert.ok(Array.from({ length: 1000 }, (_, x) => image.at(x, legend)).some((p) => p.join() === "199,125,255"), "no legend mark");
+});
+
 test("a faint room tone the video has stays faint against the music, never raised to --lufs", async () => {
   const hiss = wav("hiss", 12, (x) => {
     let seed = 3;
