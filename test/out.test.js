@@ -517,3 +517,83 @@ test("a track named in any script gets a folder of its own, and one with no lett
   for (const name of names) assert.equal(spawnSync(process.execPath, [CLI, name, "--length", "10"], { cwd, encoding: "utf8" }).status, 0);
   assert.deepEqual(fs.readdirSync(cwd).filter((e) => e.startsWith("musicfit-")).sort(), ["musicfit-песня-один", "musicfit-歌-二", "musicfit-गाना", "musicfit-गुना"].sort());
 });
+
+test("a disk that fills as the lock is made leaves nothing of it: the out folder is as it was, and one the run made goes again", async () => {
+  const real = { openSync: fs.openSync, writeSync: fs.writeSync, writeFileSync: fs.writeFileSync };
+  const full = () => Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+  const lockAt = (at) => typeof at === "string" && path.basename(at) === out.LOCK;
+  const fill = (run) => {
+    for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  };
+  const lockFds = new Set();
+  // The file is made, and its line does not fit on the disk: however the
+  // lock is written, with a descriptor or in one go.
+  const stub = () => {
+    fs.openSync = (at, ...rest) => {
+      const fd = real.openSync(at, ...rest);
+      if (lockAt(at)) lockFds.add(fd);
+      return fd;
+    };
+    fs.writeSync = (fd, ...rest) => {
+      if (lockFds.has(fd)) throw full();
+      return real.writeSync(fd, ...rest);
+    };
+    fs.writeFileSync = (at, ...rest) => {
+      if (!lockAt(at)) return real.writeFileSync(at, ...rest);
+      fs.closeSync(real.openSync(at, "wx"));
+      throw full();
+    };
+  };
+  const folder = goodFit("lock-full");
+  const before = snapshot(folder);
+  const fresh = path.join(dir, "lock-full-new", "fit");
+  for (const [at, check] of [[folder, () => assert.deepEqual(snapshot(folder), before)], [fresh, () => assert.ok(!fs.existsSync(path.dirname(fresh)), "the folders the run made are still there")]]) {
+    const run = out.begin(at);
+    fill(run);
+    try {
+      stub();
+      await assert.rejects(run.commit(), new RegExp(`^Error: Could not put the new files in ${quote(at)}: the disk is full\\. ${quote(at)} is as it was\\.$`));
+    } finally {
+      Object.assign(fs, real);
+    }
+    run.abort();
+    check();
+  }
+});
+
+test("a lock that names no process and was made a while ago is taken over at once", { timeout: 30000 }, async () => {
+  const folder = goodFit("bare-lock");
+  const lock = path.join(folder, out.LOCK);
+  fs.writeFileSync(lock, "");
+  const then = new Date(Date.now() - 10000);
+  fs.utimesSync(lock, then, then);
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  const started = Date.now();
+  await run.commit();
+  assert.ok(Date.now() - started < 5000, `the commit waited ${Date.now() - started} ms`);
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+});
+
+test("an out folder that is a link to a folder that is not there, or is below one, is refused before any work", posix, () => {
+  const { file } = fixture("house");
+  const link = path.join(dir, "link-to-nowhere");
+  fs.symlinkSync(path.join(dir, "no-such-folder"), link);
+  for (const [at, message] of [[link, `it is a link to ${quote(path.join(dir, "no-such-folder"))}, which is not there`], [path.join(link, "fit"), `${quote(link)} is a link to ${quote(path.join(dir, "no-such-folder"))}, which is not there`]]) {
+    const run = cli([file, "--length", "12", "--out", at]);
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, new RegExp(`^musicfit: Cannot write to ${quote(at)}: ${message}\n$`));
+    assert.ok(!fs.existsSync(path.join(dir, "no-such-folder")));
+  }
+  assert.deepEqual(fs.readdirSync(dir).filter((e) => e.startsWith(".musicfit-")), []);
+});
+
+test("an out folder on a drive or a share that is not there is refused, not looked for forever", () => {
+  // Every folder up to the top is missing, as on a drive that is not plugged in.
+  const root = path.parse(process.cwd()).root;
+  const at = path.join(root, "no-such-drive", "fit");
+  const script = `const fs = require("node:fs"); fs.existsSync = () => false; try { require(${JSON.stringify(path.resolve(__dirname, "../skills/musicfit/scripts/lib/out"))}).writable(${JSON.stringify(at)}); } catch (err) { console.log(err.message); }`;
+  const run = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 10000 });
+  assert.equal(run.signal, null, "writable() never returned");
+  assert.equal(run.stdout, `Cannot write to ${at}: ${root} is not there\n`);
+});

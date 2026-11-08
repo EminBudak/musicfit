@@ -34,6 +34,9 @@ const STALE = 15 * 60 * 1000;
 const LOCK = ".musicfit-commit";
 const LOCK_STALE = 60 * 1000;
 const LOCK_WAIT = 90 * 1000;
+// A lock that names no process was left by a run killed in the moment it
+// made it, before it wrote its line.
+const LOCK_BARE = 5 * 1000;
 
 const lstat = (at) => fs.lstatSync(at, { throwIfNoEntry: false });
 
@@ -42,10 +45,24 @@ const WHY = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "t
 // Whether the folder to write to can be made, checked before any work so a
 // run does not fail at its end over it (and so a recursive mkdir is never
 // tried where it does not return, such as /proc): the nearest folder that
-// exists has to be one, and writable.
+// exists has to be one, and writable. A link to a folder that is not there
+// on the way is refused, and so is a drive or a share that is not there.
 function writable(dir) {
   let at = path.resolve(dir);
-  while (!fs.existsSync(at)) at = path.dirname(at);
+  // A folder on the way, named as the user named the out folder.
+  const named = (folder) => (folder === path.resolve(dir) ? "it" : path.isAbsolute(dir) ? folder : path.relative(process.cwd(), folder) || folder);
+  while (!fs.existsSync(at)) {
+    let s = null;
+    try {
+      s = fs.lstatSync(at);
+    } catch {
+      // Not there, or a file on the way, which is told below.
+    }
+    if (s && s.isSymbolicLink()) throw new Error(`Cannot write to ${dir}: ${named(at)} is a link to ${fs.readlinkSync(at)}, which is not there`);
+    const up = path.dirname(at);
+    if (up === at) throw new Error(`Cannot write to ${dir}: ${at} is not there`);
+    at = up;
+  }
   try {
     if (!fs.statSync(at).isDirectory()) throw Object.assign(new Error(`${at} is a file`), { code: "ENOTDIR" });
     fs.accessSync(at, fs.constants.W_OK);
@@ -200,7 +217,7 @@ function begin(dir) {
 function open(state) {
   if (state.work) return state.work;
   const home = fs.existsSync(state.target) ? state.target : path.dirname(state.target);
-  for (let at = home; !fs.existsSync(at); at = path.dirname(at)) state.made.push(at);
+  for (let at = home; !fs.existsSync(at) && path.dirname(at) !== at; at = path.dirname(at)) state.made.push(at);
   const work = path.join(home, `.musicfit-part-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
   try {
     fs.mkdirSync(home, { recursive: true });
@@ -231,19 +248,38 @@ function moveError(state, err) {
 }
 
 // The lock: a file made only if it is not there, naming the machine and the
-// process that holds it.
+// process that holds it. When its line cannot be written, as when the disk
+// fills in between, it goes again, so the folder is as it was.
 function lock(at) {
+  let fd;
   try {
-    fs.writeFileSync(at, `${os.hostname()} ${process.pid}\n`, { flag: "wx" });
-    return true;
+    fd = fs.openSync(at, "wx");
   } catch (err) {
     if (err.code === "EEXIST") return false;
+    throw err;
+  }
+  let open = true;
+  try {
+    fs.writeSync(fd, `${os.hostname()} ${process.pid}\n`);
+    open = false;
+    fs.closeSync(fd);
+    return true;
+  } catch (err) {
+    if (open) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Closed already.
+      }
+    }
+    fs.rmSync(at, { force: true });
     throw err;
   }
 }
 
 // Whether a lock is one a killed run left: its process is gone from this
-// machine, or it has been held far longer than any commit takes.
+// machine, it names none and was made a while ago, or it has been held far
+// longer than any commit takes.
 function staleLock(at) {
   let text;
   let s;
@@ -254,8 +290,10 @@ function staleLock(at) {
     return null;
   }
   const [host, pid] = text.trim().split(" ");
-  const gone = host === os.hostname() && Number(pid) > 0 && !running(Number(pid));
-  return gone || Date.now() - s.mtimeMs > LOCK_STALE ? text : null;
+  const named = Boolean(host) && Number(pid) > 0;
+  const gone = named && host === os.hostname() && !running(Number(pid));
+  const age = Date.now() - s.mtimeMs;
+  return gone || age > LOCK_STALE || (!named && age > LOCK_BARE) ? text : null;
 }
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -285,8 +323,12 @@ async function commit(state) {
     try {
       held = lock(at);
     } catch (err) {
-      // The folder went again in the meantime: it is made again.
       if (err.code !== "ENOENT") throw new Error(`Could not put the new files in ${state.dir}: ${WHY[err.code] || err.message}. ${state.dir} is as it was.`);
+      // A link to a folder that is not there, made while the run worked:
+      // no waiting makes it one.
+      const s = lstat(target);
+      if (s && s.isSymbolicLink() && !fs.existsSync(target)) throw new Error(`Could not put the new files in ${state.dir}: it is a link to ${fs.readlinkSync(target)}, which is not there. ${state.dir} is as it was.`);
+      // Else the folder went again in the meantime: it is made again.
     }
     if (held) {
       try {
