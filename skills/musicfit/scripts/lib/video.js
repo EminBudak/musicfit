@@ -7,7 +7,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { RATE, run, decode } = require("./audio");
+const { RATE, run, decode, where } = require("./audio");
 
 const num = (x, digits) => String(Number(x.toFixed(digits)));
 
@@ -54,7 +54,7 @@ async function probe(file) {
   let crc;
   let said;
   try {
-    const { chunks, stderr } = await run(["-v", "info", "-nostats", "-i", file, "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"]);
+    const { chunks, stderr } = await run(["-v", "info", "-nostats", "-i", where(file), "-map", "0:V:0", "-c", "copy", "-f", "framecrc", "pipe:1"]);
     crc = Buffer.concat(chunks).toString("utf8");
     said = stderr;
   } catch (err) {
@@ -115,7 +115,7 @@ async function probe(file) {
   const constant = gaps.every((g) => Math.abs(g - step) <= Math.max(1, step * 0.01));
 
   try {
-    await run(["-v", "error", "-i", file, "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+delay_moov", "pipe:1"]);
+    await run(["-v", "error", "-i", where(file), "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+delay_moov", "pipe:1"]);
   } catch (err) {
     const tag = /Could not find tag for codec (\w+)/.exec(err.stderr || err.message);
     if (tag) throw new Error(`${name}'s picture is ${tag[1]}, which an MP4 cannot hold without encoding it again: give --video an H.264 or HEVC copy of it`);
@@ -175,7 +175,7 @@ async function ownSound(file, n) {
 // The interleaved sound as AAC in an .m4a of its own, to be measured as a
 // player hears it before the picture is copied over it once.
 async function encodeAac(samples, file) {
-  await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-b:a", "192k", "-y", file], samples);
+  await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-b:a", "192k", "-y", where(file)], samples);
 }
 
 // The video's picture, copied packet for packet, over `sound` (an .m4a),
@@ -185,7 +185,7 @@ async function encodeAac(samples, file) {
 // is tagged hvc1, the tag QuickTime, Safari and iOS play.
 async function mux(file, sound, out, { picture, comment }) {
   const tag = picture === "hevc" ? ["-tag:v", "hvc1"] : [];
-  await run(["-v", "error", "-i", file, "-i", sound, "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", out]);
+  await run(["-v", "error", "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)]);
 }
 
 module.exports = { probe, fits, ownSound, encodeAac, mux, mark, fpsText };

@@ -5,6 +5,7 @@
 // to disk but the final files. Every call here works with ffmpeg 4.4 (the
 // one Ubuntu 22.04 has) and newer.
 
+const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const RATE = 48000;
@@ -12,6 +13,11 @@ const RATE = 48000;
 function ffmpegPath() {
   return process.env.FFMPEG_PATH || "ffmpeg";
 }
+
+// A file as ffmpeg is given it: by its full path, since ffmpeg takes a name
+// whose part before a colon is all letters and digits (9:16.mp4) for a
+// protocol, and never a full path.
+const where = (file) => path.resolve(file);
 
 // What ffmpeg prints once it has given up, after the line that says why:
 // how it stopped, which says nothing of the cause. ffmpeg 4.4 ends with the
@@ -125,7 +131,7 @@ function floats(chunks) {
 // the sound is a second into the picture.
 async function decode(file, { rate = RATE, channels = 2, timeline = false } = {}) {
   try {
-    const { chunks } = await run(["-v", "error", "-i", file, "-map", "0:a:0", "-vn", ...(timeline ? ["-af", "aresample=async=1:first_pts=0"] : []), "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
+    const { chunks } = await run(["-v", "error", "-i", where(file), "-map", "0:a:0", "-vn", ...(timeline ? ["-af", "aresample=async=1:first_pts=0"] : []), "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
     const samples = floats(chunks);
     if (!samples.length) throw new Error(`${file} has no audio`);
     return samples;
@@ -143,7 +149,7 @@ async function decode(file, { rate = RATE, channels = 2, timeline = false } = {}
 // header's note of the ffmpeg that wrote it, so any ffmpeg writes the same
 // bytes for the same sound.
 async function encodeWav(samples, file, { rate = RATE, channels = 2 } = {}) {
-  await run(["-v", "error", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-c:a", "pcm_s24le", "-fflags", "+bitexact", "-y", file], samples);
+  await run(["-v", "error", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-c:a", "pcm_s24le", "-fflags", "+bitexact", "-y", where(file)], samples);
 }
 
 // EBU R128 loudness as ffmpeg's ebur128 meter reads it: integrated
@@ -172,8 +178,8 @@ async function measure(samples, { rate = RATE, channels = 2 } = {}) {
 
 // The same for the first sound of a file, as a player decodes it.
 async function measureFile(file) {
-  const { stderr } = await run(["-v", "info", "-nostats", "-i", file, "-map", "0:a:0", "-af", METER, "-f", "null", "-"]);
+  const { stderr } = await run(["-v", "info", "-nostats", "-i", where(file), "-map", "0:a:0", "-af", METER, "-f", "null", "-"]);
   return summary(stderr);
 }
 
-module.exports = { RATE, decode, encodeWav, measure, measureFile, run, reason, stopChildren };
+module.exports = { RATE, decode, encodeWav, measure, measureFile, run, reason, stopChildren, where };

@@ -467,3 +467,15 @@ test("with --video-sound voice and no voice, FIT.md says the loudness was set wh
   assert.match(md, /Loudness set to -14 LUFS where talk\.mp4's own sound does not play/);
   assert.match(md, /with its own sound, the music dipping 10 dB under it, the whole set to -14 LUFS/);
 });
+
+test("a track, a voice and a video named like 16:9 mix.wav or 9:16.mp4 are read as the files they are, not as a protocol", { skip: process.platform === "win32" ? "Windows names take no colon" : false }, () => {
+  const cwd = at("colons");
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.copyFileSync(fixture("house").file, path.join(cwd, "16:9 mix.wav"));
+  fs.copyFileSync(speech(), path.join(cwd, "vo:take 2.wav"));
+  fs.copyFileSync(film("film25", { sound: effects() }), path.join(cwd, "9:16.mp4"));
+  const run = spawnSync(process.execPath, [CLI, "16:9 mix.wav", "--length", "12", "--hit", "8", "--voice", "vo:take 2.wav", "--video", "9:16.mp4", "--video-sound", "keep", "--out", "fit"], { cwd, encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(fs.readdirSync(path.join(cwd, "fit")).sort(), ["FIT.md", "cues.json", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
+  assert.deepEqual(packets(path.join(cwd, "fit", "video.mp4")), packets(path.join(cwd, "9:16.mp4")));
+});
