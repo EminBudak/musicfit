@@ -374,13 +374,17 @@ test("--analyze and a fit keep their own default folders, so reading a track nev
   assert.deepEqual(fs.readdirSync(path.join(cwd, "musicfit-analysis-house")).sort(), ["FIT.md", "cues.json", "seams.png"]);
 });
 
-test("a run killed outright while it analyses the track leaves nothing behind: the hidden folder comes only with the first file", posix, async () => {
+test("a run killed outright while it analyses the track leaves nothing behind: the hidden folder comes only with the first file, with a video too", posix, async () => {
   const out = goodFit("killed-analysing");
   const before = snapshot(out);
   const fresh = path.join(dir, "killed-fresh", "fit");
-  for (const folder of [out, fresh]) {
+  // A video is read before the track, and leaves nothing on the disk.
+  const film = path.join(dir, "killed-film.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=14", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  for (const [folder, video] of [[out, []], [fresh, []], [out, ["--video", film]], [fresh, ["--video", film]]]) {
     const mark = path.join(dir, `decoded-${process.hrtime.bigint()}`);
-    const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", "--out", folder], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "decoded", "ffmpeg"), MUSICFIT_TEST_MARK: mark } });
+    const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", ...video, "--out", folder], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "decoded", "ffmpeg"), MUSICFIT_TEST_MARK: mark } });
     const ended = new Promise((resolve) => child.on("exit", resolve));
     for (let i = 0; i < 12000 && !fs.existsSync(mark); i++) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(fs.existsSync(mark), "the track was never decoded");
@@ -390,6 +394,51 @@ test("a run killed outright while it analyses the track leaves nothing behind: t
   assert.deepEqual(snapshot(out), before);
   assert.deepEqual(fs.readdirSync(path.dirname(out)).filter((e) => e.startsWith(".musicfit-")), []);
   assert.ok(!fs.existsSync(path.join(dir, "killed-fresh")), "a folder was made");
+});
+
+test("a stop while the track is analysed is heard at once, as the analysis has a thread of its own", posix, async () => {
+  // A track that takes seconds to analyse.
+  const long = path.join(dir, "long-house.wav");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-stream_loop", "4", "-i", fixture("house").file, "-c", "copy", long], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const folder = goodFit("stopped-analysing");
+  const before = snapshot(folder);
+  const mark = path.join(dir, `analysing-${process.hrtime.bigint()}`);
+  const child = spawn(process.execPath, [CLI, long, "--length", "30", "--out", folder], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "analysing", "ffmpeg"), MUSICFIT_TEST_MARK: mark } });
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d));
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal, at: Date.now() })));
+  for (let i = 0; i < 12000 && !fs.existsSync(mark); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(fs.existsSync(mark), "the track was never decoded");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const sent = Date.now();
+  child.kill("SIGTERM");
+  const end = await ended;
+  assert.equal(end.signal, "SIGTERM", `${end.code} ${stderr}`);
+  // The tempo is said as soon as the analysis is done: the stop came first.
+  assert.doesNotMatch(stderr, /BPM/);
+  assert.match(stderr, new RegExp(`\nmusicfit: stopped, so ${quote(folder)} is as it was\n$`));
+  assert.ok(end.at - sent < 2000, `the stop took ${end.at - sent} ms`);
+  assert.deepEqual(snapshot(folder), before);
+});
+
+test("no stretch of a long fit holds the main thread long enough to keep a stop waiting", async () => {
+  const { fit } = require("../skills/musicfit/scripts/lib/fit");
+  const folder = outDir("held");
+  let last = Date.now();
+  let longest = 0;
+  const timer = setInterval(() => {
+    const now = Date.now();
+    longest = Math.max(longest, now - last);
+    last = now;
+  }, 5);
+  try {
+    await fit(fixture("house").file, { length: 600, hit: 300, out: folder, fps: 30, duck: 10, lufs: -14, end: "auto", warnings: [] });
+  } finally {
+    clearInterval(timer);
+  }
+  // In one go, the work on ten minutes of sound held it for a second at a time.
+  assert.ok(longest < 500, `held for ${longest} ms`);
 });
 
 test("while a track is analysed the run is free to hear a stop: the analysis has a thread of its own", async () => {
@@ -686,5 +735,28 @@ test("a disk that fills while the run writes is said in plain words, and a file 
   } finally {
     fs.writeFileSync = real;
   }
+  assert.ok(!fs.existsSync(folder));
+});
+
+test("a stop while the run reads the video's frame rate, before it began, is said too, and in --json", posix, async () => {
+  const film = path.join(dir, "rate-film.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const folder = path.join(dir, "stopped-at-rate");
+  const mark = path.join(dir, `rate-${process.hrtime.bigint()}`);
+  // A time in frames with no --fps: the frame rate is read from the video first.
+  const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "300f", "--hit", "200f", "--video", film, "--out", folder, "--json"], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "slowprobe", "ffmpeg"), MUSICFIT_TEST_MARK: mark } });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += d));
+  child.stderr.on("data", (d) => (stderr += d));
+  const ended = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  for (let i = 0; i < 3000 && !fs.existsSync(mark); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(fs.existsSync(mark), "the video was never read");
+  child.kill("SIGINT");
+  const end = await ended;
+  assert.equal(end.signal, "SIGINT", `${end.code} ${stderr}`);
+  assert.equal(stderr, `musicfit: stopped, so ${folder} is as it was\n`);
+  assert.deepEqual(JSON.parse(stdout), { ok: false, error: `stopped, so ${folder} is as it was` });
   assert.ok(!fs.existsSync(folder));
 });

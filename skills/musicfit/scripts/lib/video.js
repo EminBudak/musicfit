@@ -14,6 +14,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { RATE, run, decode, where } = require("./audio");
+const { blocks } = require("./breathe");
 
 const num = (x, digits) => String(Number(x.toFixed(digits)));
 
@@ -191,11 +192,12 @@ async function ownSound(file, n, start) {
   }
   const L = new Float32Array(n);
   const R = new Float32Array(n);
-  const have = Math.min(n, x.length / 2);
-  for (let i = 0; i < have; i++) {
-    L[i] = x[2 * i];
-    R[i] = x[2 * i + 1];
-  }
+  await blocks(0, Math.min(n, x.length / 2), (from, to) => {
+    for (let i = from; i < to; i++) {
+      L[i] = x[2 * i];
+      R[i] = x[2 * i + 1];
+    }
+  });
   return { L, R, over: Math.max(0, x.length / 2 - n) / RATE };
 }
 

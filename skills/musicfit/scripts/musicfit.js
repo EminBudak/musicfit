@@ -3,7 +3,7 @@
 
 const fs = require("node:fs");
 const os = require("node:os");
-const { fit } = require("./lib/fit");
+const { fit, outDir } = require("./lib/fit");
 const { underVideo } = require("./lib/report");
 const { probe, fpsText } = require("./lib/video");
 const { stopAll } = require("./lib/out");
@@ -192,12 +192,15 @@ function summary({ dir, cues: c }) {
 // A run stopped with Ctrl-C or a signal stops its ffmpeg and removes what
 // it had made, so the out folder is left as it was, says so, and ends by
 // that signal. It says so too when its ffmpeg was stopped a moment before
-// it, by the same Ctrl-C, and the run has just failed over that. A second
-// signal, like the copy makersmcp's supervisor passes on a moment after
-// the one its process group got, finds the listener still there and
+// it, by the same Ctrl-C, and the run has just failed over that, and when
+// it is stopped before it began, while it reads the video's frame rate. A
+// second signal, like the copy makersmcp's supervisor passes on a moment
+// after the one its process group got, finds the listener still there and
 // changes nothing.
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
 let stopping = false;
+// The out folder of a run that has not begun yet.
+let pending = null;
 
 // Written at once: a pipe can be asynchronous, and the process ends next.
 function say(fd, text) {
@@ -213,7 +216,8 @@ function stopOnSignals(json) {
     process.on(signal, () => {
       if (stopping) return;
       stopping = true;
-      for (const dir of stopAll()) {
+      const stopped = stopAll();
+      for (const dir of stopped.length || !pending ? stopped : [pending]) {
         const message = `stopped, so ${dir} is as it was`;
         if (json) say(1, JSON.stringify({ ok: false, error: message }) + "\n");
         say(2, `musicfit: ${message}\n`);
@@ -249,11 +253,14 @@ async function main() {
     process.exit(code);
   };
   if (options.frames) {
+    pending = outDir(options.track, options);
     try {
       await atVideoRate(options);
     } catch (err) {
+      if (stopping) return;
       return fail(err.message, 1);
     }
+    pending = null;
     try {
       check(options);
     } catch (err) {

@@ -7,6 +7,7 @@
 
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { CHUNK, breathe } = require("./breathe");
 
 const RATE = 48000;
 
@@ -110,16 +111,22 @@ function run(args, input) {
 
 // The pipe's chunks copied byte for byte into one array of floats, without
 // joining them first: a long track would be held twice.
-function floats(chunks) {
+async function floats(chunks) {
   const bytes = chunks.reduce((n, c) => n + c.length, 0);
   const out = new Float32Array(Math.floor(bytes / 4));
   const view = new Uint8Array(out.buffer);
   let at = 0;
+  let since = 0;
   for (const chunk of chunks) {
     const take = Math.min(chunk.length, view.length - at);
     if (take <= 0) break;
     view.set(chunk.subarray(0, take), at);
     at += take;
+    since += take;
+    if (since >= 4 * CHUNK) {
+      since = 0;
+      await breathe();
+    }
   }
   return out;
 }
@@ -135,7 +142,7 @@ async function decode(file, { rate = RATE, channels = 2, from = null } = {}) {
   const align = from === null ? [] : ["-af", `aresample=${rate}:async=1:first_pts=${Math.round(from * rate)}`];
   try {
     const { chunks } = await run(["-v", "error", ...timeline, "-i", where(file), "-map", "0:a:0", "-vn", ...align, "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
-    const samples = floats(chunks);
+    const samples = await floats(chunks);
     if (!samples.length) throw new Error(`${file} has no audio`);
     return samples;
   } catch (err) {

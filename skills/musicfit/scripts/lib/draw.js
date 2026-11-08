@@ -5,6 +5,12 @@
 // below, and which part of the track went where between them.
 
 const zlib = require("node:zlib");
+const { promisify } = require("node:util");
+const { CHUNK, blocks } = require("./breathe");
+
+// Compressed in the thread pool, not on the main thread, which has to stay
+// free to hear a stop.
+const deflate = promisify(zlib.deflate);
 
 // ─── canvas ────────────────────────────────────────────────────────────────
 
@@ -157,7 +163,7 @@ function chunk(type, data) {
 }
 
 // 8-bit RGB, each row filtered against the pixel to its left.
-function png(c, text = {}) {
+async function png(c, text = {}) {
   const { width, height, px } = c;
   const stride = width * 3;
   const raw = Buffer.alloc(height * (stride + 1));
@@ -175,7 +181,7 @@ function png(c, text = {}) {
   header[8] = 8;
   header[9] = 2;
   const notes = Object.entries(text).map(([k, v]) => chunk("tEXt", Buffer.from(`${k}\0${v}`, "latin1")));
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), ...notes, chunk("IDAT", zlib.deflateSync(raw, { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), ...notes, chunk("IDAT", await deflate(raw, { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
 }
 
 // ─── seams.png ─────────────────────────────────────────────────────────────
@@ -193,16 +199,20 @@ const INK = {
 };
 const SEGMENT = ["#7b6cff", "#2ec4b6", "#ffbe0b", "#f15bb5", "#9ef01a", "#4cc9f0"];
 
-// Peaks of a stereo signal in `columns` columns over [from, to) seconds.
-function peaks(L, R, rate, from, to, columns) {
+// Peaks of a stereo signal in `columns` columns over [from, to) seconds,
+// in groups of columns that hold about a block of samples each.
+async function peaks(L, R, rate, from, to, columns) {
   const out = [];
-  for (let x = 0; x < columns; x++) {
-    const a = Math.max(0, Math.floor((from + ((to - from) * x) / columns) * rate));
-    const b = Math.min(L.length, Math.floor((from + ((to - from) * (x + 1)) / columns) * rate));
-    let hi = 0;
-    for (let i = a; i < b; i++) hi = Math.max(hi, Math.abs(L[i]), Math.abs(R[i]));
-    out.push(hi);
-  }
+  const group = Math.max(1, Math.floor(CHUNK / Math.max(1, ((to - from) * rate) / columns)));
+  await blocks(0, columns, (first, last) => {
+    for (let x = first; x < last; x++) {
+      const a = Math.max(0, Math.floor((from + ((to - from) * x) / columns) * rate));
+      const b = Math.min(L.length, Math.floor((from + ((to - from) * (x + 1)) / columns) * rate));
+      let hi = 0;
+      for (let i = a; i < b; i++) hi = Math.max(hi, Math.abs(L[i]), Math.abs(R[i]));
+      out.push(hi);
+    }
+  }, group);
   return out;
 }
 
@@ -218,7 +228,7 @@ function ruler(c, x0, width, y, seconds, scale) {
 }
 
 // cues: what report.cues() returns; source, fitted: { L, R } at `rate`.
-function seamsPng({ cues, source, fitted, rate, analysis }) {
+async function seamsPng({ cues, source, fitted, rate, analysis }) {
   const W = 1600;
   const pad = 32;
   const inner = W - pad * 2;
@@ -239,10 +249,10 @@ function seamsPng({ cues, source, fitted, rate, analysis }) {
   c.text(pad, 60, tempo, INK.dim, 2);
 
   // The track, with the parts that were used in their segment's color.
-  const drawStrip = (y, seconds, scale, L, R, color, label) => {
+  const drawStrip = async (y, seconds, scale, L, R, color, label) => {
     c.rect(pad, y, inner, stripH, INK.panel);
     const mid = y + stripH / 2;
-    const p = peaks(L, R, rate, 0, seconds, inner);
+    const p = await peaks(L, R, rate, 0, seconds, inner);
     const top = Math.max(1e-6, ...p);
     for (let x = 0; x < inner; x++) {
       const h = Math.max(1, Math.round((p[x] / top) * (stripH / 2 - 8)));
@@ -256,7 +266,7 @@ function seamsPng({ cues, source, fitted, rate, analysis }) {
     const i = segments.findIndex((s) => t >= s.source[0] && t < s.source[1]);
     return i >= 0 ? segColor(i) : "#5a5862";
   };
-  drawStrip(topY, srcSeconds, sx, source.L, source.R, cues.mode === "analysis" ? () => INK.wave : srcColor, "TRACK");
+  await drawStrip(topY, srcSeconds, sx, source.L, source.R, cues.mode === "analysis" ? () => INK.wave : srcColor, "TRACK");
   // Bar lines of the track, faint, and every fourth stronger.
   (analysis.bars || []).forEach((bar, i) => {
     if (bar.start < 0 || bar.start > srcSeconds) return;
@@ -290,7 +300,7 @@ function seamsPng({ cues, source, fitted, rate, analysis }) {
     const i = segments.findIndex((s, k) => t >= s.from && (t < s.to || k === segments.length - 1));
     return i >= 0 ? segColor(i) : INK.wave;
   };
-  drawStrip(fitY, outSeconds, ox, fitted.L, fitted.R, fitColor, "FIT");
+  await drawStrip(fitY, outSeconds, ox, fitted.L, fitted.R, fitColor, "FIT");
   cues.times.bars.forEach((t, i) => c.vline(pad + t * ox, fitY + 30, fitY + stripH, INK.grid, i % 4 === 0 ? 0.9 : 0.45));
   // Voice spans along the bottom of the strip.
   for (const span of (cues.voice && cues.voice.spans) || []) c.rect(pad + span.from * ox, fitY + stripH - 6, (span.to - span.from) * ox, 6, INK.voice, 0.85);

@@ -17,16 +17,19 @@ const { assemble, speech, floorOf, duck, normalize, interleave, scale, attackNea
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
 const { claim, begin, sameFile } = require("./out");
+const { blocks } = require("./breathe");
 const version = require("./version");
 
-function split(interleaved) {
+async function split(interleaved) {
   const n = interleaved.length / 2;
   const L = new Float32Array(n);
   const R = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    L[i] = interleaved[2 * i];
-    R[i] = interleaved[2 * i + 1];
-  }
+  await blocks(0, n, (from, to) => {
+    for (let i = from; i < to; i++) {
+      L[i] = interleaved[2 * i];
+      R[i] = interleaved[2 * i + 1];
+    }
+  });
   return { L, R };
 }
 
@@ -54,14 +57,17 @@ function slug(file) {
   return `${chars.slice(0, 53).join("").replace(/-+$/, "")}-${hash}`;
 }
 
+// Where a run saves: --out, else a folder named after the track. A fit and
+// an analysis of the same track keep their own folders.
+const outDir = (track, options) => options.out || (options.analyze ? `musicfit-analysis-${slug(track)}` : `musicfit-${slug(track)}`);
+
 const seconds = (spans) => spans.reduce((sum, [from, to]) => sum + (to - from), 0);
 
 // options: { length, hit, drop, fps, voice, duck, video, videoSound, lufs,
 // end, fade, bpm, meter, out, analyze, log }. Without fps, frames count at
 // the video's frame rate with a video, and at 30 without one.
 async function fit(track, options) {
-  // A fit and an analysis of the same track keep their own folders.
-  const dir = options.out || (options.analyze ? `musicfit-analysis-${slug(track)}` : `musicfit-${slug(track)}`);
+  const dir = outDir(track, options);
   if (options.voice && !fs.existsSync(options.voice)) throw new Error(`Cannot read ${options.voice}: no such file`);
   if (options.video && !fs.existsSync(options.video)) throw new Error(`Cannot read ${options.video}: no such file`);
   const writes = options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), ...(options.video ? ["video.mp4"] : []), "cues.json", "seams.png", "FIT.md"];
@@ -114,10 +120,10 @@ async function readVideo(track, o) {
   o.log && o.log(`Reading ${picture.name}'s own sound`);
   const own = await ownSound(o.video, Math.round(o.length * RATE), picture.start);
   if (!own) return { ...video, sound: "none" };
-  const spans = speech(own);
+  const spans = await speech(own);
   // A sound that never goes quiet, like a music bed, plays all the way
   // through even where speech() hears no more than a steady floor.
-  const plays = floorOf(own) > -40 ? o.length : seconds(spans);
+  const plays = (await floorOf(own)) > -40 ? o.length : seconds(spans);
   if (sound === undefined && plays > 0) {
     throw new Error(`${picture.name} has sound of its own for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay at their level, the music dips ${num(o.duck / 2)} dB under them), voice for speech (set to ${o.lufs} LUFS, the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
   }
@@ -144,7 +150,7 @@ async function aac(sound, file, lufs) {
   let m;
   for (let round = 0; round < 4; round++) {
     if (round) await normalize(sound, { lufs, peak: ceiling });
-    await encodeAac(interleave(sound), file);
+    await encodeAac(await interleave(sound), file);
     m = await measureFile(file);
     if (!(m.truePeak > -1)) break;
     ceiling -= m.truePeak + 1 + 0.1;
@@ -173,14 +179,14 @@ async function make(track, options, run, video) {
     const c = analysisCues({ version, track: trackName, analysis: a, options });
     fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
     fs.writeFileSync(run.file("FIT.md"), analysisMarkdown(c, { trackName }));
-    fs.writeFileSync(run.file("seams.png"), seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
+    fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
     return { cues: c, analysis: a };
   }
 
   if (options.hit !== undefined && options.hit > options.length) throw new Error(`--hit ${options.hit} is past the end (--length ${options.length})`);
   const p = plan(a, { length: options.length, hit: options.hit, end: options.end, fade: options.fade });
   log(`Plan: ${p.segments.length} ${p.segments.length === 1 ? "part" : "parts"}, ${p.seams.length} ${p.seams.length === 1 ? "seam" : "seams"}`);
-  const r = assemble(source, p, a, { length: options.length, fade: options.fade });
+  const r = await assemble(source, p, a, { length: options.length, fade: options.fade });
   const music = { L: r.L, R: r.R };
   const n = music.L.length;
   const loudness = await normalize(music, { lufs: options.lufs });
@@ -191,11 +197,11 @@ async function make(track, options, run, video) {
   if (options.voice) {
     log(`Ducking under ${path.basename(options.voice)}`);
     // The voice that is the video's own sound is read on its timeline.
-    v = split(await decode(options.voice, { rate: RATE, channels: 2, from: video && video.same === "voice" ? video.picture.start : null }));
+    v = await split(await decode(options.voice, { rate: RATE, channels: 2, from: video && video.same === "voice" ? video.picture.start : null }));
     spoken = { L: new Float32Array(n), R: new Float32Array(n) };
     spoken.L.set(v.L.subarray(0, n));
     spoken.R.set(v.R.subarray(0, n));
-    spans = speech(spoken);
+    spans = await speech(spoken);
   }
   // The music dips --duck dB under the voice and under the video's own
   // sound with --video-sound voice, and half as far under that sound with
@@ -203,23 +209,25 @@ async function make(track, options, run, video) {
   // once it dips as far as under the deeper one.
   const depth = video && video.sound === "voice" ? options.duck : video && video.sound === "keep" ? options.duck / 2 : null;
   const dips = [...spans, ...(depth === null ? [] : video.spans.map(([from, to]) => [from, to, depth]))];
-  if (options.voice || dips.length) duck(music, dips, options.duck);
+  if (options.voice || dips.length) await duck(music, dips, options.duck);
 
   let voice = null;
   let mix = null;
   if (options.voice) {
     await normalize(spoken, { lufs: options.lufs });
     mix = { L: new Float32Array(n), R: new Float32Array(n) };
-    for (let i = 0; i < n; i++) {
-      mix.L[i] = music.L[i] + spoken.L[i];
-      mix.R[i] = music.R[i] + spoken.R[i];
-    }
+    await blocks(0, n, (from, to) => {
+      for (let i = from; i < to; i++) {
+        mix.L[i] = music.L[i] + spoken.L[i];
+        mix.R[i] = music.R[i] + spoken.R[i];
+      }
+    });
     voice = { file: path.basename(options.voice), duck: options.duck, spans, loudness: await normalize(mix, { lufs: options.lufs }) };
     if (v.L.length > n + RATE * 0.05) options.warnings.push(`The voice runs ${(v.L.length / RATE - options.length).toFixed(2)} s past the end and was cut there.`);
     if (!spans.length) options.warnings.push("No speech was found in the voice track, so the music was not ducked.");
   }
   // The music now dips, so it reads quieter as a whole.
-  if (options.voice || dips.length) loudness.after = await measure(interleave(music));
+  if (options.voice || dips.length) loudness.after = await measure(await interleave(music));
 
   let laid = null;
   if (video) {
@@ -232,21 +240,22 @@ async function make(track, options, run, video) {
     // to the target like a voice.
     const total = Math.round(picture.seconds * RATE);
     const under = { L: new Float32Array(total), R: new Float32Array(total) };
-    const add = (x) => {
-      for (let i = 0; i < Math.min(total, x.L.length); i++) {
-        under.L[i] += x.L[i];
-        under.R[i] += x.R[i];
-      }
-    };
-    add(music);
-    if (spoken) add(spoken);
+    const add = (x) =>
+      blocks(0, Math.min(total, x.L.length), (from, to) => {
+        for (let i = from; i < to; i++) {
+          under.L[i] += x.L[i];
+          under.R[i] += x.R[i];
+        }
+      });
+    await add(music);
+    if (spoken) await add(spoken);
     if (own) {
       if (video.sound === "voice" && video.spans.length) await normalize(own, { lufs: options.lufs });
       else {
-        const level = await measure(interleave(own));
-        if (level.integrated > options.lufs) scale(own, 10 ** ((options.lufs - level.integrated) / 20));
+        const level = await measure(await interleave(own));
+        if (level.integrated > options.lufs) await scale(own, 10 ** ((options.lufs - level.integrated) / 20));
       }
-      add(own);
+      await add(own);
     }
     await normalize(under, { lufs: options.lufs });
     const m4a = run.scratch("sound.m4a");
@@ -256,13 +265,13 @@ async function make(track, options, run, video) {
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
   }
 
-  await encodeWav(interleave(music), run.file("fitted.wav"));
-  if (mix) await encodeWav(interleave(mix), run.file("mix.wav"));
+  await encodeWav(await interleave(music), run.file("fitted.wav"));
+  if (mix) await encodeWav(await interleave(mix), run.file("mix.wav"));
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice, video: laid });
   fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
   fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName }));
-  fs.writeFileSync(run.file("seams.png"), seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
+  fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
   return { cues: c, analysis: a, plan: p };
 }
 
-module.exports = { fit, slug };
+module.exports = { fit, slug, outDir };

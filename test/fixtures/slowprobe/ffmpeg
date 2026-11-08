@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, but before the call that lists a video's frames
+# it leaves a file at $MUSICFIT_TEST_MARK and waits, so a test can stop the
+# run while it reads the video's frame rate.
+for arg do
+  if [ "$arg" = framecrc ]; then
+    : > "$MUSICFIT_TEST_MARK"
+    sleep 10
+  fi
+done
+exec ffmpeg "$@"

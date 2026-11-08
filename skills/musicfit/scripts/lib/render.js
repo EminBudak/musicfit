@@ -5,6 +5,7 @@
 // where they need it, the music ducked under a voice, and the loudness set.
 
 const { RATE, measure } = require("./audio");
+const { CHUNK, breathe, blocks } = require("./breathe");
 
 // Seams fade over 30 ms ending 12 ms before the downbeat, so the new bar's
 // first hit plays whole and the old bar's next one never sounds. Without
@@ -121,7 +122,7 @@ const sCurve = (u) => 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, u))
 
 // src: { L, R } at 48 kHz. Returns the fitted { L, R } and where things
 // ended up: segments, seams (with their crossfades), the fades.
-function assemble(src, p, a, { length, fade }) {
+async function assemble(src, p, a, { length, fade }) {
   const total = Math.round(length * RATE);
   const L = new Float32Array(total);
   const R = new Float32Array(total);
@@ -221,17 +222,20 @@ function assemble(src, p, a, { length, fade }) {
     const first = s === 0 ? 0 : into.fadeFrom;
     const last = out ? out.fadeTo : Math.min(total, musicEnd);
     const off = seg.src0 - seg.out0;
-    for (let t = Math.max(0, first); t < Math.min(total, last); t++) {
-      let g = 1;
-      if (into && t < into.fadeTo) g *= crossfadeGains((t - into.fadeFrom) / (into.fadeTo - into.fadeFrom), into.rho)[1];
-      if (out && t >= out.fadeFrom) g *= crossfadeGains((t - out.fadeFrom) / (out.fadeTo - out.fadeFrom), out.rho)[0];
-      if (s === 0 && t < fadeIn) g *= sCurve(t / fadeIn);
-      if (fadeOut && t >= fadeOut.from) g *= t >= fadeOut.to ? 0 : 1 - sCurve((t - fadeOut.from) / (fadeOut.to - fadeOut.from));
-      const i = t + off;
-      if (i < 0 || i >= src.L.length || g === 0) continue;
-      L[t] += src.L[i] * g;
-      R[t] += src.R[i] * g;
-    }
+    const head = s === 0;
+    await blocks(Math.max(0, first), Math.min(total, last), (from, to) => {
+      for (let t = from; t < to; t++) {
+        let g = 1;
+        if (into && t < into.fadeTo) g *= crossfadeGains((t - into.fadeFrom) / (into.fadeTo - into.fadeFrom), into.rho)[1];
+        if (out && t >= out.fadeFrom) g *= crossfadeGains((t - out.fadeFrom) / (out.fadeTo - out.fadeFrom), out.rho)[0];
+        if (head && t < fadeIn) g *= sCurve(t / fadeIn);
+        if (fadeOut && t >= fadeOut.from) g *= t >= fadeOut.to ? 0 : 1 - sCurve((t - fadeOut.from) / (fadeOut.to - fadeOut.from));
+        const i = t + off;
+        if (i < 0 || i >= src.L.length || g === 0) continue;
+        L[t] += src.L[i] * g;
+        R[t] += src.R[i] * g;
+      }
+    });
   }
 
   const placed = segs.map((s) => ({
@@ -282,22 +286,25 @@ function outputBeats(segs, a, total) {
 // ─── the voice ─────────────────────────────────────────────────────────────
 
 // The level of each 10 ms of a sound, in dB.
-function levels(audio) {
+async function levels(audio) {
   const hop = RATE / 100;
   const n = Math.floor(audio.L.length / hop);
   const out = new Float64Array(n);
-  for (let k = 0; k < n; k++) {
-    let sum = 0;
-    for (let i = k * hop; i < (k + 1) * hop; i++) sum += ((audio.L[i] + audio.R[i]) / 2) ** 2;
-    out[k] = 10 * Math.log10(sum / hop + 1e-12);
-  }
+  const { L, R } = audio;
+  await blocks(0, n, (from, to) => {
+    for (let k = from; k < to; k++) {
+      let sum = 0;
+      for (let i = k * hop; i < (k + 1) * hop; i++) sum += ((L[i] + R[i]) / 2) ** 2;
+      out[k] = 10 * Math.log10(sum / hop + 1e-12);
+    }
+  });
   return out;
 }
 
 // How loud a sound is at its quietest: its quietest tenth, in dB. A room
 // tone sits far down; a music bed or a tone that never stops does not.
-function floorOf(audio) {
-  const sorted = levels(audio).sort();
+async function floorOf(audio) {
+  const sorted = (await levels(audio)).sort();
   return sorted.length ? sorted[Math.floor(sorted.length * 0.1)] : -Infinity;
 }
 
@@ -306,8 +313,8 @@ function floorOf(audio) {
 // quietest tenth), so a few words over a long hiss are found too. Pauses
 // under 0.6 s are bridged, blips under 0.12 s dropped. Returns [from, to]
 // spans in seconds.
-function speech(voice) {
-  const level = levels(voice);
+async function speech(voice) {
+  const level = await levels(voice);
   const n = level.length;
   const sorted = Float64Array.from(level).sort();
   const loud = sorted[Math.floor(sorted.length * 0.995)];
@@ -336,7 +343,7 @@ function speech(voice) {
 // before it and coming back over 0.5 s after it stops. A span can carry a
 // depth of its own as its third value; where spans meet, the music dips as
 // far as the deepest of them, never further.
-function duck(music, spans, depth) {
+async function duck(music, spans, depth) {
   const gain = new Float32Array(music.L.length).fill(1);
   const attack = Math.round(0.15 * RATE);
   const release = Math.round(0.5 * RATE);
@@ -344,35 +351,44 @@ function duck(music, spans, depth) {
     const floor = 10 ** (-(own === undefined ? depth : own) / 20);
     const a = Math.round(from * RATE);
     const b = Math.round(to * RATE);
-    for (let i = Math.max(0, a - attack); i < Math.min(gain.length, b + release); i++) {
-      let g = floor;
-      if (i < a) g = 1 - (1 - floor) * sCurve((i - (a - attack)) / attack);
-      else if (i >= b) g = floor + (1 - floor) * sCurve((i - b) / release);
-      if (g < gain[i]) gain[i] = g;
+    await blocks(Math.max(0, a - attack), Math.min(gain.length, b + release), (start, end) => {
+      for (let i = start; i < end; i++) {
+        let g = floor;
+        if (i < a) g = 1 - (1 - floor) * sCurve((i - (a - attack)) / attack);
+        else if (i >= b) g = floor + (1 - floor) * sCurve((i - b) / release);
+        if (g < gain[i]) gain[i] = g;
+      }
+    });
+  }
+  const { L, R } = music;
+  await blocks(0, gain.length, (from, to) => {
+    for (let i = from; i < to; i++) {
+      L[i] *= gain[i];
+      R[i] *= gain[i];
     }
-  }
-  for (let i = 0; i < gain.length; i++) {
-    music.L[i] *= gain[i];
-    music.R[i] *= gain[i];
-  }
+  });
 }
 
 // ─── loudness ──────────────────────────────────────────────────────────────
 
-function interleave({ L, R }) {
+async function interleave({ L, R }) {
   const out = new Float32Array(L.length * 2);
-  for (let i = 0; i < L.length; i++) {
-    out[2 * i] = L[i];
-    out[2 * i + 1] = R[i];
-  }
+  await blocks(0, L.length, (from, to) => {
+    for (let i = from; i < to; i++) {
+      out[2 * i] = L[i];
+      out[2 * i + 1] = R[i];
+    }
+  });
   return out;
 }
 
-function scale({ L, R }, gain) {
-  for (let i = 0; i < L.length; i++) {
-    L[i] *= gain;
-    R[i] *= gain;
-  }
+async function scale({ L, R }, gain) {
+  await blocks(0, L.length, (from, to) => {
+    for (let i = from; i < to; i++) {
+      L[i] *= gain;
+      R[i] *= gain;
+    }
+  });
 }
 
 // Peaks between samples, as a 4x oversampled meter sees them: each gap
@@ -390,26 +406,22 @@ const PHASES = [0.25, 0.5, 0.75].map((frac) => {
   return k;
 });
 
-// A long sound takes seconds to scan, so the scan stops every half million
-// samples to let a stop (Ctrl-C, a signal) be heard.
-const CHUNK = 1 << 19;
-const breathe = () => new Promise((resolve) => setImmediate(resolve));
-
 async function truePeaks(x) {
   const n = x.length;
   const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    if (i % CHUNK === CHUNK - 1) await breathe();
-    let peak = Math.abs(x[i]);
-    if (i >= TAPS - 1 && i + TAPS < n) {
-      for (const k of PHASES) {
-        let v = 0;
-        for (let j = 0; j < 2 * TAPS; j++) v += k[j] * x[i - (TAPS - 1) + j];
-        if (Math.abs(v) > peak) peak = Math.abs(v);
+  await blocks(0, n, (from, to) => {
+    for (let i = from; i < to; i++) {
+      let peak = Math.abs(x[i]);
+      if (i >= TAPS - 1 && i + TAPS < n) {
+        for (const k of PHASES) {
+          let v = 0;
+          for (let j = 0; j < 2 * TAPS; j++) v += k[j] * x[i - (TAPS - 1) + j];
+          if (Math.abs(v) > peak) peak = Math.abs(v);
+        }
       }
+      out[i] = peak;
     }
-    out[i] = peak;
-  }
+  });
   return out;
 }
 
@@ -424,34 +436,44 @@ async function limit({ L, R }, ceiling) {
   const pl = await truePeaks(L);
   const pr = await truePeaks(R);
   const need = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const peak = Math.max(pl[i], pr[i]);
-    need[i] = peak > ceiling ? ceiling / peak : 1;
-  }
-  // The lowest need within [i, i + ahead], with a deque of minima.
+  await blocks(0, n, (from, to) => {
+    for (let i = from; i < to; i++) {
+      const peak = Math.max(pl[i], pr[i]);
+      need[i] = peak > ceiling ? ceiling / peak : 1;
+    }
+  });
+  // The lowest need within [i, i + ahead], with a deque of minima, from the
+  // last sample to the first.
   const lowest = new Float32Array(n);
   const deque = new Int32Array(n);
-  let head = 0;
-  let tail = 0;
-  for (let i = n - 1; i >= 0; i--) {
-    while (tail > head && need[deque[tail - 1]] >= need[i]) tail--;
-    deque[tail++] = i;
-    while (deque[head] > i + ahead) head++;
-    lowest[i] = need[deque[head]];
+  const ends = { head: 0, tail: 0 };
+  for (let to = n; to > 0; to -= CHUNK) {
+    await breathe();
+    let { head, tail } = ends;
+    for (let i = to - 1; i >= Math.max(0, to - CHUNK); i--) {
+      while (tail > head && need[deque[tail - 1]] >= need[i]) tail--;
+      deque[tail++] = i;
+      while (deque[head] > i + ahead) head++;
+      lowest[i] = need[deque[head]];
+    }
+    Object.assign(ends, { head, tail });
   }
   // Averaged over [i - ahead, i]: every value in that window covers sample
   // i, so the average is never above what sample i needs.
   const release = 1 - Math.exp(-1 / (0.08 * RATE));
-  let sum = 0;
-  let g = 1;
-  for (let i = 0; i < n; i++) {
-    sum += lowest[i];
-    if (i > ahead) sum -= lowest[i - ahead - 1];
-    const smooth = (sum + Math.max(0, ahead - i)) / (ahead + 1);
-    g = smooth < g ? smooth : g + (smooth - g) * release;
-    L[i] *= g;
-    R[i] *= g;
-  }
+  const kept = { sum: 0, g: 1 };
+  await blocks(0, n, (from, to) => {
+    let { sum, g } = kept;
+    for (let i = from; i < to; i++) {
+      sum += lowest[i];
+      if (i > ahead) sum -= lowest[i - ahead - 1];
+      const smooth = (sum + Math.max(0, ahead - i)) / (ahead + 1);
+      g = smooth < g ? smooth : g + (smooth - g) * release;
+      L[i] *= g;
+      R[i] *= g;
+    }
+    Object.assign(kept, { sum, g });
+  });
 }
 
 // Brings audio to `lufs` integrated with true peaks at or below `peak`
@@ -459,17 +481,17 @@ async function limit({ L, R }, ceiling) {
 // only when that gain would push peaks over. A target too loud to reach
 // under the peak limit is left short of it rather than clipped.
 async function normalize(audio, { lufs, peak = -1 }) {
-  const before = await measure(interleave(audio));
+  const before = await measure(await interleave(audio));
   if (!Number.isFinite(before.integrated)) return { before, after: before, gain: 0, limited: false };
   const gain = lufs - before.integrated;
-  scale(audio, 10 ** (gain / 20));
+  await scale(audio, 10 ** (gain / 20));
   let after = { ...before, integrated: lufs, truePeak: before.truePeak + gain };
-  if (after.truePeak <= peak) return { before, after: await measure(interleave(audio)), gain, limited: false };
+  if (after.truePeak <= peak) return { before, after: await measure(await interleave(audio)), gain, limited: false };
   let ceiling = peak - 0.3;
   let raised = true;
   for (let round = 0; round < 4; round++) {
     await limit(audio, 10 ** (ceiling / 20));
-    after = await measure(interleave(audio));
+    after = await measure(await interleave(audio));
     raised = false;
     if (after.truePeak > peak) {
       ceiling -= after.truePeak - peak + 0.1;
@@ -479,14 +501,14 @@ async function normalize(audio, { lufs, peak = -1 }) {
     // peaks again on the next round.
     const more = lufs - after.integrated;
     if (more <= 0.1) break;
-    scale(audio, 10 ** (more / 20));
+    await scale(audio, 10 ** (more / 20));
     raised = true;
   }
   // The last word is always the limiter's.
   for (let round = 0; round < 3 && (raised || after.truePeak > peak); round++) {
     if (after.truePeak > peak) ceiling -= after.truePeak - peak + 0.2;
     await limit(audio, 10 ** (ceiling / 20));
-    after = await measure(interleave(audio));
+    after = await measure(await interleave(audio));
     raised = false;
   }
   return { before, after, gain, limited: true };

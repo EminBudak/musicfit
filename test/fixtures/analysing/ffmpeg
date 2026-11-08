@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs the ffmpeg on PATH, and once the track has been decoded both for the
+# fit (stereo at 48 kHz) and for the analysis (mono at 24 kHz) leaves a file
+# at $MUSICFIT_TEST_MARK, so a test can stop the run while it analyses it.
+ffmpeg "$@"
+status=$?
+case " $* " in
+  *" -ar 24000 "*) : > "$MUSICFIT_TEST_MARK.24000" ;;
+  *" -ac 2 -ar 48000 -f f32le "*) : > "$MUSICFIT_TEST_MARK.48000" ;;
+esac
+if [ -e "$MUSICFIT_TEST_MARK.24000" ] && [ -e "$MUSICFIT_TEST_MARK.48000" ]; then : > "$MUSICFIT_TEST_MARK"; fi
+exit $status
