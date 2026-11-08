@@ -456,6 +456,25 @@ test("seams.png marks where the music dips under the video's own sound with voic
   assert.ok(Array.from({ length: 1000 }, (_, x) => image.at(x, legend)).some((p) => p.join() === "199,125,255"), "no legend mark");
 });
 
+test("seams.png titles a track named outside a to z by its letters without their marks, or as the track when it has letters the picture cannot draw, never with question marks", () => {
+  const title = (name) => {
+    const cwd = at(`title-${Buffer.from(name).toString("hex")}`);
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.copyFileSync(fixture("house").file, path.join(cwd, name));
+    const run = spawnSync(process.execPath, [CLI, name, "--analyze", "--out", "out"], { cwd, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    const image = pixels(path.join(cwd, "out", "seams.png"));
+    // The title's rows, drawn three pixels to a dot from y 24.
+    return Array.from({ length: 26 }, (_, y) => Array.from({ length: image.width }, (_, x) => image.at(x, 22 + y).join()).join(" ")).join("\n");
+  };
+  assert.equal(title("Şarkı.wav"), title("SARKI.WAV"));
+  assert.equal(title("трек 音楽.wav"), title("THE TRACK"));
+  const { drawable } = require("../skills/musicfit/scripts/lib/draw");
+  assert.equal(drawable("café_noir & co!.mp3"), "CAFE_NOIR & CO!.MP3");
+  assert.equal(drawable("Smørrebrød straße.wav"), "SMORREBROD STRASSE.WAV");
+  assert.equal(drawable("गाना.wav"), null);
+});
+
 test("a faint room tone the video has stays faint against the music, never raised to --lufs", async () => {
   const hiss = wav("hiss", 12, (x) => {
     let seed = 3;

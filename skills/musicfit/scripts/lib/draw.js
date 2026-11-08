@@ -131,12 +131,43 @@ Z ##### ....# ...#. ..#.. .#... #.... #####
 < ...#. ..#.. .#... #.... .#... ..#.. ...#.
 ' ..#.. ..#.. .#... ..... ..... ..... .....
 ? .###. #...# ....# ...#. ..#.. ..... ..#..
+_ ..... ..... ..... ..... ..... ..... #####
+! ..#.. ..#.. ..#.. ..#.. ..#.. ..... ..#..
+& .##.. #..#. #.#.. .#... #.#.# #..#. .##.#
+# .#.#. .#.#. ##### .#.#. ##### .#.#. .#.#.
+@ .###. #...# #.### #.#.# #.### #.... .###.
+[ .###. .#... .#... .#... .#... .#... .###.
+] .###. ...#. ...#. ...#. ...#. ...#. .###.
+* ..... ..#.. #.#.# .###. #.#.# ..#.. .....
+; ..... .##.. .##.. ..... .##.. ..#.. .#...
+" .#.#. .#.#. .#.#. ..... ..... ..... .....
+~ ..... ..... .#... #.#.# ...#. ..... .....
+$ ..#.. .#### #.#.. .###. ..#.# ####. ..#..
+| ..#.. ..#.. ..#.. ..#.. ..#.. ..#.. ..#..
+{ ...## ..#.. ..#.. .#... ..#.. ..#.. ...##
+} ##... ..#.. ..#.. ...#. ..#.. ..#.. ##...
+^ ..#.. .#.#. #...# ..... ..... ..... .....
+\` .#... ..#.. ..... ..... ..... ..... .....
+\\ ..... #.... .#... ..#.. ...#. ....# .....
 `;
 
 const FONT = { " ": Array(7).fill(".....") };
 for (const line of GLYPHS.trim().split("\n")) {
   const [ch, ...rows] = line.split(" ");
   FONT[ch] = rows;
+}
+
+// Latin letters the font draws as others, which no mark comes off of.
+const FOLD = { "Ø": "O", "Æ": "AE", "Œ": "OE", "Ł": "L", "Đ": "D", "Ð": "D", "Þ": "TH", "Ħ": "H", "Ŧ": "T", "Ŋ": "N", "Ŀ": "L", "ẞ": "SS" };
+
+// A name as the font draws it: in capitals, Latin letters without their
+// marks (ş as S, ø as O); null when anything in it is left that the font
+// has no letter for, as a name in Cyrillic or Chinese, which is then left
+// out rather than drawn as question marks.
+function drawable(text) {
+  const plain = String(text).toUpperCase().normalize("NFKD").replace(/\p{M}/gu, "");
+  const folded = Array.from(plain, (ch) => FOLD[ch] || ch).join("");
+  return Array.from(folded).every((ch) => FONT[ch]) ? folded : null;
 }
 
 // ─── PNG ───────────────────────────────────────────────────────────────────
@@ -263,7 +294,9 @@ async function seamsPng({ cues, source, fitted, rate, analysis }) {
   const outSeconds = cues.length;
   const sx = inner / srcSeconds;
   const ox = inner / outSeconds;
-  const title = cues.mode === "analysis" ? `MUSICFIT  ${cues.track}` : `MUSICFIT  ${cues.track} TO ${outSeconds.toFixed(2)} S`;
+  // The track by its name when the font can draw it, else as the track.
+  const track = drawable(cues.track) || "THE TRACK";
+  const title = cues.mode === "analysis" ? `MUSICFIT  ${track}` : `MUSICFIT  ${track} TO ${outSeconds.toFixed(2)} S`;
   c.text(pad, 24, title.slice(0, 120), INK.text, 3);
   const tempo = cues.tempo ? `${cues.tempo.bpm.toFixed(1)} BPM  ${cues.tempo.meter}/4  ${cues.mode === "phrases" ? "CUTS IN PAIRS OF BARS" : cues.mode === "energy" ? "NO STEADY BEAT: LONG CROSSFADES" : cues.mode === "analysis" ? "" : "CUTS ON BAR LINES"}` : "NO STEADY BEAT: LONG CROSSFADES";
   c.text(pad, 60, tempo, INK.dim, 2);
@@ -366,4 +399,4 @@ async function seamsPng({ cues, source, fitted, rate, analysis }) {
   return png(c, { Software: "musicfit" });
 }
 
-module.exports = { seamsPng };
+module.exports = { seamsPng, drawable };
