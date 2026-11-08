@@ -48,7 +48,7 @@ musicfit-track/
 
 The lists are cut short here; the file has every beat and bar.
 
-`--analyze` reads a track without fitting it and saves its `cues.json`, `seams.png` and `FIT.md` in `musicfit-analysis-track/` by default, so reading a track does not replace its fit unless both are given the same `--out`.
+`--analyze` reads a track without fitting it and saves its `cues.json`, `seams.png` and `FIT.md` in `musicfit-track.analysis/` by default. No fit's folder can have that name, so reading a track never replaces a fit, unless both are given the same `--out`.
 
 A run makes its files in a hidden folder whose name starts with `.musicfit-part-`, inside the out folder (or next to it when the run makes the out folder), and puts them in place only once it has ended well. Nothing is made before the run writes its first file, after the track is read. A run that fails, is refused or is stopped with Ctrl-C or a signal leaves the out folder as it was: the earlier run's files stay and nothing is added. A run that ends well replaces the files the earlier run's `cues.json` lists and removes those it did not make again, like `mix.wav` after a fit with no voice. A file under one of musicfit's names (`fitted.wav`, `mix.wav`, `video.mp4`, `cues.json`, `seams.png`, `FIT.md`) that no musicfit `cues.json` there lists is not musicfit's: a run that would write over it is refused before any work, and one that would not leaves it alone, as it leaves files under other names. A run whose track, voice or video is one of the files it would replace or remove is refused before any work too. Two runs that end at the same moment in one folder take turns, and the later one's files are what is left. When a file is held open by another program and cannot be moved, the run says so, takes its own new files out again and puts the earlier files back; any earlier file it cannot put back waits in a folder the message names, with a note of where each file belongs, and no later run removes that folder. A run killed outright (`kill -9`, or the system when memory runs out) after it began writing cannot tidy up: its hidden folder stays, and if it was killed in the moment it moved its files in, some of the earlier files can be in there, and a `.musicfit-commit` file stays in the out folder. A later run that ends well in the same place removes that folder once the killed run's process is gone and nothing in the folder has changed for 15 minutes, and takes the `.musicfit-commit` file away when it puts its own files in.
 
@@ -109,7 +109,7 @@ npx musicfit@latest <track> --length <time> [options]
   --bpm <n>         the tempo, when the one found is half or double the real one
   --meter <n>       beats to a bar, 3 or 4 (default: found)
   --out <dir>       where to save (default: ./musicfit-<track name>, or
-                    ./musicfit-analysis-<track name> with --analyze)
+                    ./musicfit-<track name>.analysis with --analyze)
   --analyze         only read the track: its beats, bars, drop and ending
   --json            print cues.json instead of a summary
 ```

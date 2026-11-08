@@ -58,8 +58,10 @@ function slug(file) {
 }
 
 // Where a run saves: --out, else a folder named after the track. A fit and
-// an analysis of the same track keep their own folders.
-const outDir = (track, options) => options.out || (options.analyze ? `musicfit-analysis-${slug(track)}` : `musicfit-${slug(track)}`);
+// an analysis keep their own folders: the analysis folder ends in
+// .analysis, and since slug() never keeps a dot, no fit's folder can have
+// that name, whatever its track is called.
+const outDir = (track, options) => options.out || (options.analyze ? `musicfit-${slug(track)}.analysis` : `musicfit-${slug(track)}`);
 
 const seconds = (spans) => spans.reduce((sum, [from, to]) => sum + (to - from), 0);
 

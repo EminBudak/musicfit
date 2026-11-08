@@ -361,17 +361,24 @@ test("the hidden folder is made only when the run writes its first file, and one
   assert.ok(!fs.existsSync(path.join(dir, "lazy")), "a folder made for the hidden one is still there");
 });
 
-test("--analyze and a fit keep their own default folders, so reading a track never replaces its fit", () => {
+test("--analyze and a fit keep their own default folders, so reading a track never replaces its fit, nor the fit of a track whose name starts with Analysis", () => {
   const { file } = fixture("house");
   const cwd = path.join(dir, "defaults");
   fs.mkdirSync(cwd);
-  const run = (args) => spawnSync(process.execPath, [CLI, file, ...args], { cwd, encoding: "utf8" });
-  assert.equal(run(["--length", "12"]).status, 0);
-  assert.equal(run(["--analyze"]).status, 0);
-  assert.ok(fs.existsSync(path.join(cwd, "musicfit-house", "fitted.wav")));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-house", "cues.json"), "utf8")).mode, "bars");
-  assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "musicfit-analysis-house", "cues.json"), "utf8")).mode, "analysis");
-  assert.deepEqual(fs.readdirSync(path.join(cwd, "musicfit-analysis-house")).sort(), ["FIT.md", "cues.json", "seams.png"]);
+  for (const name of ["house.wav", "Analysis House.wav"]) fs.copyFileSync(file, path.join(cwd, name));
+  const run = (args) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8" });
+  const cues = (folder) => JSON.parse(fs.readFileSync(path.join(cwd, folder, "cues.json"), "utf8"));
+  assert.equal(run(["house.wav", "--length", "12"]).status, 0);
+  assert.equal(run(["Analysis House.wav", "--length", "12"]).status, 0);
+  assert.equal(run(["house.wav", "--analyze"]).status, 0);
+  assert.equal(run(["Analysis House.wav", "--analyze"]).status, 0);
+  assert.deepEqual(fs.readdirSync(cwd).filter((e) => e.startsWith("musicfit-")).sort(), ["musicfit-analysis-house", "musicfit-analysis-house.analysis", "musicfit-house", "musicfit-house.analysis"]);
+  for (const [folder, track] of [["musicfit-house", "house.wav"], ["musicfit-analysis-house", "Analysis House.wav"]]) {
+    assert.deepEqual(fs.readdirSync(path.join(cwd, folder)).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"], folder);
+    assert.deepEqual([cues(folder).mode, cues(folder).track], ["bars", track], folder);
+    assert.deepEqual(fs.readdirSync(path.join(cwd, `${folder}.analysis`)).sort(), ["FIT.md", "cues.json", "seams.png"], `${folder}.analysis`);
+    assert.deepEqual([cues(`${folder}.analysis`).mode, cues(`${folder}.analysis`).track], ["analysis", track], `${folder}.analysis`);
+  }
 });
 
 test("a run killed outright while it analyses the track leaves nothing behind: the hidden folder comes only with the first file, with a video too", posix, async () => {

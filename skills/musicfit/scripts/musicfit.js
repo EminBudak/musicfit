@@ -43,7 +43,7 @@ Options:
   --bpm <n>         the tempo, when the one found is half or double the real one
   --meter <n>       beats to a bar, 3 or 4 (default: found)
   --out <dir>       where to save (default: ./musicfit-<track name>, or
-                    ./musicfit-analysis-<track name> with --analyze)
+                    ./musicfit-<track name>.analysis with --analyze)
   --analyze         only read the track: its beats, bars, drop and ending
   --json            print cues.json instead of a summary
   -h, --help        show this help
