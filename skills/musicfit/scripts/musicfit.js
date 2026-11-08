@@ -31,14 +31,16 @@ Options:
                     The video has to be --length long, to a frame
   --video-sound <how>
                     what becomes of the video's own sound: keep (sound
-                    effects: 3 dB louder than the music where they play,
-                    and the music does not dip), voice (speech: set to
-                    --lufs where it plays, and the music dips --duck under
-                    it) or drop (music of its own: left out). A faint room
-                    tone, or a voice with no speech found, is only turned
-                    down to --lufs if it is louder. Without it, a video with
-                    more than a faint room tone of its own is refused until
-                    you choose
+                    effects: each place it plays set 3 dB louder than the
+                    music there, but never under --lufs, never more than
+                    6 dB over it, and where music plays never so loud that
+                    its peaks pass -1 dBFS; the music does not dip), voice
+                    (speech: set to --lufs where it plays, and the music
+                    dips --duck under it) or drop (music of its own: left
+                    out). A faint room tone, or a voice with no speech
+                    found, is only turned down to --lufs if it is louder.
+                    Without it, a video with more than a faint room tone
+                    of its own is refused until you choose
   --lufs <n>        loudness target in LUFS (default: -14)
   --end <kind>      auto, natural (the track's own ending) or fade (default: auto)
   --fade <s>        length of the closing fade, in whole beats (default: a bar)

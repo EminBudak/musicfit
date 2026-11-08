@@ -568,28 +568,159 @@ function dips(spans, n) {
   return ranges;
 }
 
-// How loud a sound is over `spans` alone ([from, to] in seconds): the
-// spans laid end to end, and over again until they make 3 s, so the meter
-// has its 400 ms blocks to read even when they are short clicks.
-// -Infinity where it is silent.
-async function levelOver(audio, spans) {
-  const parts = spans.map(([from, to]) => [Math.max(0, Math.round(from * RATE)), Math.min(audio.L.length, Math.round(to * RATE))]).filter(([a, b]) => b > a);
-  const n = parts.reduce((sum, [a, b]) => sum + (b - a), 0);
-  if (!n) return -Infinity;
-  const total = Math.max(n, 3 * RATE);
-  const L = new Float32Array(total);
-  const R = new Float32Array(total);
-  for (let at = 0; at < total; ) {
-    for (const [a, b] of parts) {
-      const take = Math.min(b - a, total - at);
-      if (take <= 0) break;
-      L.set(audio.L.subarray(a, a + take), at);
-      R.set(audio.R.subarray(a, a + take), at);
-      at += take;
-    }
-    await breathe();
+// K-weighting, as ITU-R BS.1770 has it at 48 kHz: a shelf that lifts the
+// highs, then a high-pass under the bass. Each stage is b0, b1, b2, a1, a2.
+const K = [
+  [1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585],
+  [1, -2, 1, -1.99004745483398, 0.99007225036621],
+];
+
+// How loud the stretch [a, b) of a sound is, in samples, as a loudness
+// meter reads a stretch that short, without its gates: K-weighted, both
+// channels, in LUFS. The filters start 0.1 s before the stretch, so they
+// have settled when it begins. -Infinity where it is silent.
+async function loudnessOf({ L, R }, a, b) {
+  a = Math.max(0, a);
+  b = Math.min(L.length, b);
+  if (b <= a) return -Infinity;
+  const [[b0, b1, b2, a1, a2], [c0, c1, c2, d1, d2]] = K;
+  let power = 0;
+  for (const x of [L, R]) {
+    const kept = { s: [0, 0, 0, 0, 0, 0, 0, 0], sum: 0 };
+    await blocks(Math.max(0, a - Math.round(0.1 * RATE)), b, (from, to) => {
+      let [x1, x2, y1, y2, u1, u2, v1, v2] = kept.s;
+      let sum = kept.sum;
+      for (let i = from; i < to; i++) {
+        const shelf = b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1;
+        x1 = x[i];
+        y2 = y1;
+        y1 = shelf;
+        const high = c0 * shelf + c1 * u1 + c2 * u2 - d1 * v1 - d2 * v2;
+        u2 = u1;
+        u1 = shelf;
+        v2 = v1;
+        v1 = high;
+        if (i >= a) sum += high * high;
+      }
+      kept.s = [x1, x2, y1, y2, u1, u2, v1, v2];
+      kept.sum = sum;
+    });
+    power += kept.sum / (b - a);
   }
-  return (await measure({ L, R })).integrated;
+  const lufs = -0.691 + 10 * Math.log10(power);
+  return lufs > -70 ? lufs : -Infinity;
+}
+
+// The peak no place of a video's own sound is raised past where music
+// plays under it, in dBFS: the true peak limit the whole is held to.
+const PEAK = -1;
+
+// --video-sound keep: each place where the video's own sound plays
+// ([from, to] in seconds) is set `over` dB louder than the music there, both
+// read over that place, so a sound effect stands out without the music
+// dipping under it. A place is never set quieter than the target, so one
+// over quiet music or none is at the target, and never more than `most` dB
+// louder than the target, so one over the loudest music is not raised so
+// far that the limiter holding the whole has to pull it and the music down
+// again. Where music plays, a place is not raised past the gain that brings
+// its own peak to PEAK either: a sharp sound, or short clicks far apart
+// that read quiet over their place, would have the limiter pull the music
+// down around each. Such places stand less than `over` dB over the music.
+// The gain holds over each place and for up to 0.5 s after it, so its tail
+// keeps the same level, then turns to the next place's along an S-curve
+// that ends 10 ms before it. Returns each place with the gain it got and
+// how far over the music it was set (null where no music plays), and with
+// its samples as they are now, for cameOut().
+async function setOver(own, music, spans, { lufs, over, most }) {
+  const places = [];
+  for (const [from, to] of spans) {
+    const a = Math.round(from * RATE);
+    const b = Math.round(to * RATE);
+    const level = await loudnessOf(own, a, b);
+    const bed = await loudnessOf(music, a, b);
+    const want = Math.min(lufs + most, Math.max(lufs, bed + over));
+    const top = { peak: 0 };
+    await blocks(Math.max(0, a), Math.min(own.L.length, b), (from, to) => {
+      let { peak } = top;
+      for (let i = from; i < to; i++) peak = Math.max(peak, Math.abs(own.L[i]), Math.abs(own.R[i]));
+      top.peak = peak;
+    });
+    let gain = Number.isFinite(level) ? want - level : 0;
+    if (Number.isFinite(bed) && top.peak > 0) gain = Math.min(gain, PEAK - 20 * Math.log10(top.peak));
+    places.push({ from, to, a, b, gain, over: Number.isFinite(bed) ? level + gain - bed : null });
+  }
+  const { L, R } = own;
+  const n = L.length;
+  const hold = Math.round(RELEASE * RATE);
+  const lead = Math.round(0.01 * RATE);
+  let at = 0;
+  for (let k = 0; k < places.length; k++) {
+    const next = places[k + 1];
+    const end = next ? Math.round(places[k].to * RATE) : n;
+    const gap = next ? Math.max(0, Math.round(next.from * RATE) - end) : 0;
+    const turn = end + Math.min(hold, Math.floor(gap / 2));
+    const reach = Math.max(turn, end + gap - Math.min(lead, gap - (turn - end)));
+    const g = 10 ** (places[k].gain / 20);
+    if (g !== 1) {
+      await blocks(Math.min(at, n), Math.min(turn, n), (from, to) => {
+        for (let i = from; i < to; i++) {
+          L[i] *= g;
+          R[i] *= g;
+        }
+      });
+    }
+    if (next && reach > turn) {
+      const [g0, g1] = [places[k].gain, next.gain];
+      await blocks(turn, Math.min(reach, n), (from, to) => {
+        for (let i = from; i < to; i++) {
+          const gi = 10 ** ((g0 + (g1 - g0) * sCurve((i - turn) / (reach - turn))) / 20);
+          L[i] *= gi;
+          R[i] *= gi;
+        }
+      });
+    }
+    at = reach;
+  }
+  for (const p of places) p.own = { L: L.slice(p.a, p.b), R: R.slice(p.a, p.b) };
+  return places;
+}
+
+// How far over the music each place of setOver() came out once the whole
+// was set to the target and its peaks held, which takes more off a loud
+// sound effect than off the music under it: the whole split over the place
+// into the music and the place's own sound by least squares, as a meter
+// can split them, and the place's `over` moved by the difference in their
+// gains. Each place's samples are let go.
+async function cameOut(places, whole, music) {
+  for (const p of places) {
+    const { own } = p;
+    delete p.own;
+    if (p.over === null) continue;
+    const sums = { mm: 0, oo: 0, mo: 0, hm: 0, ho: 0 };
+    await blocks(0, own.L.length, (from, to) => {
+      let { mm, oo, mo, hm, ho } = sums;
+      for (const [o, m, h] of [[own.L, music.L, whole.L], [own.R, music.R, whole.R]]) {
+        for (let i = from; i < to; i++) {
+          const x = m[p.a + i] || 0;
+          const y = h[p.a + i] || 0;
+          mm += x * x;
+          oo += o[i] * o[i];
+          mo += x * o[i];
+          hm += y * x;
+          ho += y * o[i];
+        }
+      }
+      Object.assign(sums, { mm, oo, mo, hm, ho });
+    });
+    const { mm, oo, mo, hm, ho } = sums;
+    // The two have to be told apart: not the same sound.
+    const det = mm * oo - mo * mo;
+    if (!(det > 0.0001 * mm * oo)) continue;
+    const gm = (hm * oo - ho * mo) / det;
+    const go = (ho * mm - hm * mo) / det;
+    if (gm > 0 && go > 0) p.over += 20 * Math.log10(go / gm);
+  }
 }
 
 // Sets a sound, with one gain over the whole of it, so it reads `lufs`
@@ -617,4 +748,4 @@ async function setWhere(audio, spans, lufs) {
   return gain;
 }
 
-module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, levelOver, setWhere, scale, attackNear };
+module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, loudnessOf, setOver, cameOut, setWhere, scale, attackNear };

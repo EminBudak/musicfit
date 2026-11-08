@@ -13,7 +13,7 @@ const { probe, fits, ownSound, encodeAac, mux, mark, fpsText } = require("./vide
 const { RATE: ANALYSIS_RATE } = require("./analyze");
 const { analyzeInThread } = require("./thread");
 const { plan } = require("./plan");
-const { assemble, speech, BLIP, floorOf, duck, normalize, levelOver, setWhere, scale, attackNear } = require("./render");
+const { assemble, speech, BLIP, floorOf, duck, normalize, setOver, cameOut, setWhere, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
 const { claim, begin, sameFile } = require("./out");
@@ -145,7 +145,7 @@ async function readVideo(track, o) {
   // through even where speech() hears no more than a steady floor.
   const plays = (await floorOf(own)) > -40 ? o.length : seconds(heard);
   if (sound === undefined && plays > 0) {
-    throw new Error(`${picture.name} has sound of its own for ${plays < 0.1 ? plays.toFixed(2) : plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay, ${KEEP_OVER} dB louder than the music where they play, and the music does not dip), voice for speech (set to ${o.lufs} LUFS where it plays, and the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
+    throw new Error(`${picture.name} has sound of its own for ${plays < 0.1 ? plays.toFixed(2) : plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay, at least ${KEEP_OVER} dB louder than the music where they play, or as near as the loudness and peak limits allow, and the music does not dip), voice for speech (set to ${o.lufs} LUFS where it plays, and the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
   }
   // Silence, or a faint room tone the music covers, is kept.
   sound = sound || "keep";
@@ -154,7 +154,7 @@ async function readVideo(track, o) {
   const spans = sound === "voice" ? heard.filter(([a, b]) => b - a >= BLIP) : heard;
   if (own.over > 0.05) o.warnings.push(`${picture.name}'s own sound runs ${own.over.toFixed(2)} s past the end and was cut there.`);
   const dipped = seconds(spans);
-  if (sound === "keep" && plays > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, ${dipped > 0.6 * o.length ? `${KEEP_OVER} dB louder than the music most of the way` : "along with the music"}. If that sound is music of its own, --video-sound drop leaves it out.`);
+  if (sound === "keep" && plays > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${plays.toFixed(1)} of its ${o.length.toFixed(1)} s, along with the music. If that sound is music of its own, --video-sound drop leaves it out.`);
   if (sound === "voice" && dipped > 0.6 * o.length) o.warnings.push(`${picture.name}'s own sound plays for ${dipped.toFixed(1)} of its ${o.length.toFixed(1)} s, so the music stays dipped most of the way. If that sound is music of its own, --video-sound drop leaves it out.`);
   if (sound === "voice" && !spans.length) o.warnings.push(`No speech was found in ${picture.name}'s own sound, so the music does not dip under it, and it is not raised: it is only turned down if it is louder than ${o.lufs} LUFS.`);
   return { ...video, sound, own, spans };
@@ -178,8 +178,21 @@ const num = (x) => String(Math.round(x * 10) / 10);
 // How much louder than the music the video's own sound is where it plays
 // with --video-sound keep, in dB (LU, as the meter reads it): enough to
 // hear sound effects over the music without dipping it, so a drop that
-// lands with one keeps its weight.
+// lands with one keeps its weight. And how much louder than the target a
+// place of it may be at most, so the limiter that holds the whole does not
+// pull the music down with it where the music is loudest.
 const KEEP_OVER = 3;
+const KEEP_MOST = 6;
+
+// The note for places keep set less than KEEP_OVER dB over the music: the
+// first few, each by its time and how it came out.
+function heldPlaces(name, held, count, lufs) {
+  const said = held.slice(0, 4).map((p) => `${p.from.toFixed(2)} s (${p.over >= 0.05 ? `${num(p.over)} dB over it` : p.over > -0.05 ? "as loud as it" : `${num(-p.over)} dB under it`})`);
+  if (held.length > 4) said.push(`${held.length - 4} more`);
+  const list = said.length === 1 ? said[0] : `${said.slice(0, -1).join(", ")} and ${said[said.length - 1]}`;
+  const where = held.length < count ? `in ${held.length} of the ${count} places it plays` : count === 1 ? "where it plays" : count === 2 ? "in both places it plays" : `in all ${count} places it plays`;
+  return `${name}'s own sound is less than ${KEEP_OVER} dB louder than the music ${where}, at ${list}: it is set no louder than ${num(lufs + KEEP_MOST)} LUFS, ${KEEP_MOST} dB over the target, nor so loud that its own peaks pass -1 dBFS. If it has to stand out there, --video-sound voice dips the music under it instead.`;
+}
 
 // AAC can lift a true peak over the -1 dBTP the sound was held to, and by
 // another amount each time the sound is encoded. So the sound is encoded on
@@ -291,28 +304,22 @@ async function make(track, options, run, video) {
     // What plays under the picture, cut or padded to it: the music as it
     // dips, the voice, and the video's own sound. With voice, that sound is
     // set to the target where it plays, as a voice is, and the music dips
-    // under it. With keep, one gain sets it KEEP_OVER dB louder than the
-    // music where it plays, raising quiet sound effects and turning loud
-    // ones down, while the music plays on at its level; where no music
-    // plays under it, it is set to the target. A sound with nothing in it
-    // that stands out, a faint room tone, is only turned down, to the
-    // target when it is louder, so it stays faint against the music. Then
-    // the whole is set to the target, which moves them all by the same
-    // amount. The video's own sound, read as long as the picture, is where
-    // the rest is added in.
+    // under it. With keep, each place it plays is set KEEP_OVER dB louder
+    // than the music there, never quieter than the target nor more than
+    // KEEP_MOST dB louder than it (setOver in render.js), raising quiet
+    // sound effects and turning loud ones down, while the music plays on
+    // at its level. A sound with nothing in it that stands out, a faint
+    // room tone, is only turned down, to the target when it is louder, so
+    // it stays faint against the music. Then the whole is set to the
+    // target, which moves them all by the same amount. The video's own
+    // sound, read as long as the picture, is where the rest is added in.
     const total = Math.round(picture.seconds * RATE);
     let under = video.own;
     video.own = null;
-    let over = null;
+    let places = null;
     if (under) {
-      if (video.sound === "keep" && video.spans.length) {
-        const own = await levelOver(under, video.spans);
-        const bed = await levelOver(music, video.spans);
-        if (Number.isFinite(own)) {
-          if (Number.isFinite(bed)) over = KEEP_OVER;
-          await scale(under, 10 ** (((Number.isFinite(bed) ? bed + KEEP_OVER : options.lufs) - own) / 20));
-        }
-      } else if (video.spans.length) await setWhere(under, video.spans, options.lufs);
+      if (video.sound === "keep" && video.spans.length) places = await setOver(under, music, video.spans, { lufs: options.lufs, over: KEEP_OVER, most: KEEP_MOST });
+      else if (video.spans.length) await setWhere(under, video.spans, options.lufs);
       else {
         const level = await measure(under);
         if (level.integrated > options.lufs) await scale(under, 10 ** ((options.lufs - level.integrated) / 20));
@@ -329,11 +336,16 @@ async function make(track, options, run, video) {
     if (spoken) await add(spoken);
     spoken = null;
     await normalize(under, { lufs: options.lufs });
+    if (places) await cameOut(places, under, music);
     const m4a = run.scratch("sound.m4a");
     const level = await aac(under, m4a, options.lufs);
     under = null;
     await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version), start: picture.start });
-    laid = { ...picture, sound: video.sound, same: video.same, duck: depth, over, spans: video.spans, loudness: level };
+    laid = { ...picture, sound: video.sound, same: video.same, duck: depth, over: places ? KEEP_OVER : null, spans: video.spans, places, loudness: level };
+    // The places keep could not set KEEP_OVER dB over the music, said as
+    // they came out.
+    const held = (places || []).filter((p) => p.over !== null && Math.round(p.over * 10) / 10 < KEEP_OVER - 0.5);
+    if (held.length) options.warnings.push(heldPlaces(picture.name, held, places.length, options.lufs));
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
     if (Number.isFinite(level.integrated) && level.integrated < options.lufs - 0.5) options.warnings.push(`video.mp4 is at ${level.integrated.toFixed(1)} LUFS after the AAC encoding, short of the ${options.lufs} LUFS asked for: any louder and its true peaks would pass -1 dBTP.`);
   }

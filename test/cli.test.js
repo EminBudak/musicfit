@@ -4,6 +4,7 @@
 // the ones that read a file need ffmpeg.
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
@@ -94,6 +95,13 @@ test("--video and --video-sound: what they take, what they refuse, and frames th
   const help = spawnSync(process.execPath, [CLI, "--help"], { encoding: "utf8" }).stdout;
   assert.match(help, /\n {2}--video <file> {4}a video to lay the result under: also writes video\.mp4,/);
   assert.match(help, /\n {2}--video-sound <how>\n {20}what becomes of the video's own sound: keep/);
+});
+
+test("--help keeps to the width of its widest option lines, and the README lists the options as --help does", () => {
+  const help = spawnSync(process.execPath, [CLI, "--help"], { encoding: "utf8" }).stdout;
+  for (const line of help.split("\n")) assert.ok(line.length <= 82, `${line.length} characters: ${line}`);
+  const options = (text) => text.slice(text.indexOf("  --length <time>"), text.indexOf("  --json ")).trimEnd();
+  assert.equal(options(fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8")), options(help));
 });
 
 test("without ffmpeg it says how to get it", () => {
