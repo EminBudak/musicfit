@@ -367,8 +367,11 @@ function identity(at) {
 // The moves, with the lock held. cues.json is moved aside first and in
 // last, so a commit cut short never leaves a cues.json that speaks for
 // files it does not describe. A move that fails puts back what was moved,
-// each file only while it is still the one this run moved and its place is
-// free; what cannot go back waits in a folder no later run removes.
+// each file only while it is still the one this run moved: a new file goes
+// back to the hidden folder, or is removed when it cannot go, and an
+// earlier file goes back to its place when that is free. An earlier file
+// that cannot go back waits in a folder no later run removes, and the
+// message says where each file is.
 function swap(state) {
   const { target, work } = state;
   const fresh = NAMES.filter((name) => fs.existsSync(path.join(work, name)));
@@ -376,21 +379,21 @@ function swap(state) {
   const old = path.join(work, ".old");
   fs.mkdirSync(old, { recursive: true });
   const moved = [];
-  const move = (from, to, name) => {
+  const move = (from, to, name, fresh) => {
     try {
       rename(from, to);
     } catch (err) {
       throw Object.assign(err, { file: name });
     }
-    moved.push({ from, to, id: identity(to) });
+    moved.push({ from, to, name, fresh, id: identity(to) });
   };
   const aside = (name) => {
-    if (before.includes(name)) move(path.join(target, name), path.join(old, name), name);
+    if (before.includes(name)) move(path.join(target, name), path.join(old, name), name, false);
   };
   const into = (name) => {
     if (!fresh.includes(name)) return;
     if (lstat(path.join(target, name))) throw Object.assign(new Error("a file came there while the run worked"), { file: name });
-    move(path.join(work, name), path.join(target, name), name);
+    move(path.join(work, name), path.join(target, name), name, true);
   };
   try {
     aside("cues.json");
@@ -400,31 +403,67 @@ function swap(state) {
     }
     into("cues.json");
   } catch (err) {
-    const stuck = [];
+    // The earlier files that stay in the hidden folder, and the new ones
+    // that stay in the out folder.
+    const earlierStuck = [];
+    const newStuck = [];
     for (const m of moved.reverse()) {
-      const ours = m.id !== null && identity(m.to) === m.id;
+      // A file that is no longer the one this run moved is not its own.
+      if (m.id === null || identity(m.to) !== m.id) continue;
       try {
-        if (!ours || lstat(m.from)) throw new Error("changed");
+        if (lstat(m.from)) throw new Error("its place is taken");
         rename(m.to, m.from);
       } catch {
-        if (ours) stuck.push(m.to);
+        if (!m.fresh) earlierStuck.push(m.name);
+        else {
+          try {
+            fs.unlinkSync(m.to);
+          } catch {
+            newStuck.push(m.name);
+          }
+        }
       }
     }
     const { held, why } = moveError(state, err);
-    if (stuck.length) {
+    if (earlierStuck.length || newStuck.length) {
       ended(state, false);
-      const kept = keep(state, stuck);
-      throw new Error(`Could not put the new files in ${state.dir}: ${why}. Some of the earlier files could not be put back: they are in ${kept}.`);
+      const kept = earlierStuck.length ? path.join(keep(state, earlierStuck, newStuck), ".old") : null;
+      const it = (names) => (names.length === 1 ? "it is" : "they are");
+      const earlierText = kept ? ` The earlier ${and(earlierStuck)} could not be put back: ${it(earlierStuck)} in ${kept}.` : "";
+      const newText = newStuck.length ? ` The new ${and(newStuck)} could not be taken out again, so in ${state.dir} ${it(newStuck)} this run's.` : "";
+      throw new Error(`Could not put the new files in ${state.dir}: ${why}.${earlierText}${newText}`);
     }
     throw new Error(`Could not put the new files in ${state.dir}: ${why}. ${state.dir} is as it was${held ? "; close the file and run again" : ""}.`);
   }
   ended(state, true);
 }
 
-function keep(state, stuck) {
+// The hidden folder of a commit that could not put every earlier file
+// back, under a name that is not hidden, with a note of what is in it and
+// where each file belongs. The note also tells sweep() to leave the folder
+// alone when it could not be renamed.
+const KEPT = "musicfit-kept.txt";
+
+function keep(state, earlierStuck, newStuck) {
+  const note = path.join(state.work, KEPT);
+  const lines = [
+    `A musicfit run could not put its new files in ${state.dir}, nor every earlier file back. These earlier files are in .old here:`,
+    ...earlierStuck.map((name) => `  .old/${name}, which belongs in ${state.dir} as ${name}`),
+    ...(newStuck.length ? [`In ${state.dir}, ${and(newStuck)} ${newStuck.length === 1 ? "is" : "are"} that run's new ${newStuck.length === 1 ? "file" : "files"}: remove ${newStuck.length === 1 ? "it" : "them"} first.`] : []),
+    `Move the earlier files back into ${state.dir}, then remove this folder. musicfit leaves it alone.`,
+  ];
+  try {
+    fs.writeFileSync(note, lines.join("\n") + "\n");
+  } catch {
+    // A full disk: the note is there even when its words are not.
+    try {
+      fs.closeSync(fs.openSync(note, "a"));
+    } catch {
+      // Nothing more can be done here.
+    }
+  }
   const to = path.join(path.dirname(state.work), path.basename(state.work).replace(/^\.musicfit-part-/, "musicfit-kept-"));
   try {
-    fs.writeFileSync(path.join(state.work, "musicfit-kept.txt"), `A musicfit run could not put these files back in ${state.dir}:\n${stuck.map((f) => `  ${path.relative(state.work, f)}`).join("\n")}\nMove them where they belong, then remove this folder. musicfit leaves it alone.\n`);
     rename(state.work, to);
     return to;
   } catch {
@@ -482,6 +521,7 @@ function touched(folder) {
 // Removes the hidden folders of runs killed outright: their process is
 // gone and nothing in them has changed for STALE. Nothing in one is put
 // back: the run that ends well here has made the folder what it should be.
+// One whose earlier files a message sent the user to keeps them.
 function sweep(folder) {
   let entries = [];
   try {
@@ -493,7 +533,7 @@ function sweep(folder) {
     const m = PART.exec(entry.name);
     if (!m || !entry.isDirectory()) continue;
     const at = path.join(folder, entry.name);
-    if (running(Number(m[1])) || Date.now() - touched(at) < STALE) continue;
+    if (running(Number(m[1])) || Date.now() - touched(at) < STALE || lstat(path.join(at, KEPT))) continue;
     remove(at);
   }
 }

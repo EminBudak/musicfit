@@ -294,7 +294,7 @@ test("a commit that fails never moves back over a file that came in its place, n
     };
     const run = out.begin(folder);
     for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
-    await assert.rejects(run.commit(), /Some of the earlier files could not be put back: they are in .*musicfit-kept-/);
+    await assert.rejects(run.commit(), /\. The earlier fitted\.wav could not be put back: it is in .*musicfit-kept-[^/]+\/\.old\.$/);
     run.abort();
   } finally {
     fs.renameSync = real;
@@ -596,4 +596,71 @@ test("an out folder on a drive or a share that is not there is refused, not look
   const run = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 10000 });
   assert.equal(run.signal, null, "writable() never returned");
   assert.equal(run.stdout, `Cannot write to ${at}: ${root} is not there\n`);
+});
+
+// A commit whose fourth move fails, as a file held open does, and whose new
+// fitted.wav cannot go back to the hidden folder either. With `unlink`
+// false, it cannot be removed from the out folder too.
+async function commitHeld(name, { unlink = true, rename = true } = {}) {
+  const folder = goodFit(name);
+  const before = snapshot(folder);
+  const real = { renameSync: fs.renameSync, unlinkSync: fs.unlinkSync };
+  let count = 0;
+  const run = out.begin(folder);
+  for (const file of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(file), `new ${file}\n`);
+  let error = null;
+  try {
+    fs.renameSync = (from, to) => {
+      const busy = Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+      // Back from the out folder into the hidden one, not aside into .old.
+      if (from === path.join(folder, "fitted.wav") && path.basename(path.dirname(to)).startsWith(".musicfit-part-")) throw busy;
+      if (!rename && path.basename(to).startsWith("musicfit-kept-")) throw busy;
+      if (++count === 4) throw Object.assign(new Error("not now"), { code: "EIO" });
+      return real.renameSync(from, to);
+    };
+    fs.unlinkSync = (at) => {
+      if (!unlink && at === path.join(folder, "fitted.wav")) throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+      return real.unlinkSync(at);
+    };
+    await run.commit();
+  } catch (err) {
+    error = err;
+  } finally {
+    Object.assign(fs, real);
+  }
+  run.abort();
+  return { folder, before, error };
+}
+
+test("a commit that fails takes its new file out of the out folder when it cannot move it back, so every earlier file returns", async () => {
+  const { folder, before, error } = await commitHeld("held-new");
+  assert.match(String(error), new RegExp(`: not now\\. ${quote(folder)} is as it was\\.$`));
+  assert.deepEqual(snapshot(folder), before);
+});
+
+test("a commit that can put neither its new file out nor the earlier one back says which is where, and the note says the same", async () => {
+  const { folder, error } = await commitHeld("held-both", { unlink: false });
+  const kept = fs.readdirSync(folder).find((e) => e.startsWith("musicfit-kept-"));
+  assert.ok(kept, "no kept folder");
+  assert.equal(String(error), `Error: Could not put the new files in ${folder}: ${path.join(folder, "mix.wav")}: not now. The earlier fitted.wav could not be put back: it is in ${path.join(folder, kept, ".old")}. The new fitted.wav could not be taken out again, so in ${folder} it is this run's.`);
+  assert.equal(fs.readFileSync(path.join(folder, "fitted.wav"), "utf8"), "new fitted.wav\n");
+  assert.ok(fs.existsSync(path.join(folder, kept, ".old", "fitted.wav")));
+  const note = fs.readFileSync(path.join(folder, kept, "musicfit-kept.txt"), "utf8");
+  assert.match(note, new RegExp(`\n  \\.old/fitted\\.wav, which belongs in ${quote(folder)} as fitted\\.wav\n`));
+  assert.match(note, new RegExp(`In ${quote(folder)}, fitted\\.wav is that run's new file: remove it first\\.`));
+  assert.doesNotMatch(note, /\.\.\//);
+});
+
+test("a hidden folder with a note of the earlier files it keeps is never removed by a later run", async () => {
+  const { folder, error } = await commitHeld("held-kept", { unlink: false, rename: false });
+  assert.match(String(error), /The earlier fitted\.wav could not be put back: it is in .*\.musicfit-part-[^/]+\/\.old\./);
+  // Its run has ended, and it has not changed for 20 minutes.
+  const mine = fs.readdirSync(folder).find((e) => e.startsWith(".musicfit-part-"));
+  const dead = path.join(folder, mine.replace(/^(\.musicfit-part-)\d+/, `$1${deadPid()}`));
+  fs.renameSync(path.join(folder, mine), dead);
+  age(dead, 20);
+  fs.writeFileSync(path.join(folder, "fitted.wav"), fs.readFileSync(path.join(dead, ".old", "fitted.wav")));
+  const plain = cli([fixture("house").file, "--length", "12", "--out", folder]);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.ok(fs.existsSync(path.join(dead, ".old", "fitted.wav")), "the earlier fitted.wav the message named went");
 });
