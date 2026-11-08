@@ -31,8 +31,8 @@ Options:
                     The video has to be --length long, to a frame
   --video-sound <how>
                     what becomes of the video's own sound: keep (sound
-                    effects: set to --lufs where they play, and the music
-                    dips half of --duck under them), voice (speech: set to
+                    effects: 3 dB louder than the music where they play,
+                    and the music does not dip), voice (speech: set to
                     --lufs where it plays, and the music dips --duck under
                     it) or drop (music of its own: left out). A faint room
                     tone, or a voice with no speech found, is only turned
@@ -53,8 +53,8 @@ Options:
 
 Times are seconds unless they end in f: frames at --fps, or with --video and
 no --fps at the video's frame rate. The track can be any file ffmpeg reads,
-a video's sound included, but a file, not an address. Needs Node 22 or newer and ffmpeg 4.4 or newer;
-set FFMPEG_PATH to pick the ffmpeg.`;
+a video's sound included, but a file, not an address. Needs Node 22 or
+newer and ffmpeg 4.4 or newer; set FFMPEG_PATH to pick the ffmpeg.`;
 
 const VALUED = new Set(["--length", "--hit", "--drop", "--fps", "--voice", "--duck", "--video", "--video-sound", "--lufs", "--end", "--fade", "--bpm", "--meter", "--out"]);
 

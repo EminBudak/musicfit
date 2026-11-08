@@ -108,13 +108,13 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
     seams,
     voice: voice ? { file: voice.file, duck: voice.duck, spans: voice.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })) } : null,
     // With --video: video.mp4, the video's picture with this sound under
-    // it. sound is what became of the video's own sound: keep (set to the
-    // target where it plays, the music dipping half of --duck under it),
-    // voice (the same, the music dipping --duck under its speech), drop
-    // (left out) or none (it had none). With keep or voice and no spans it
-    // was only turned down to the target, when it was louder. same says
-    // when the video was the track or the voice, which play in its place;
-    // spans are where it plays and duck how far the music dips there.
+    // it. sound is what became of the video's own sound: keep (set `over`
+    // dB louder than the music where it plays, the music not dipping),
+    // voice (set to the target where it plays, the music dipping `duck` dB
+    // under its speech), drop (left out) or none (it had none). With keep
+    // or voice and no spans it was only turned down to the target, when it
+    // was louder. same says when the video was the track or the voice,
+    // which play in its place; spans are where it plays.
     video: video
       ? {
           file: "video.mp4",
@@ -126,7 +126,8 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
           picture: video.picture,
           sound: video.sound,
           same: video.same,
-          duck: video.sound === "voice" || video.sound === "keep" ? video.duck : null,
+          duck: video.sound === "voice" ? video.duck : null,
+          over: video.over === undefined ? null : video.over,
           spans: video.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })),
           loudness: { target: options.lufs, integrated: round1(video.loudness.integrated), truePeak: round1(video.loudness.truePeak) },
         }
@@ -309,8 +310,10 @@ function underVideo(c) {
   const all = c.voice ? "the music, the voice and its own sound" : "the music and its own sound";
   const set = `set to ${v.loudness.target} LUFS where it plays`;
   if (v.sound === "keep" && !v.spans.length) return all;
-  if (v.sound === "keep" && c.voice) return `${all}, that sound ${set} and the music dipping ${c.voice.duck} dB under the voice and ${v.duck} dB under its own sound`;
-  if (v.sound === "keep") return `${all}, that sound ${set} and the music dipping ${v.duck} dB under it in ${places(v.spans.length)}`;
+  // keep: that sound over the music, which does not dip under it.
+  const over = v.over !== null ? `${v.over} dB louder than the music where it plays (${places(v.spans.length)})` : `${set}, as no music plays there`;
+  if (v.sound === "keep" && c.voice) return `${all}, the music dipping ${c.voice.duck} dB under the voice and its own sound ${over}`;
+  if (v.sound === "keep") return `${all}, that sound ${over}`;
   if (v.sound === "voice" && !v.spans.length) return `${all}, which had no speech for the music to dip under`;
   if (v.sound === "voice") return `its own sound ${set}${voice}, the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
   if (v.sound === "drop") return `the music${voice} in place of its own sound`;

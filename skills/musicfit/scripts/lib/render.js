@@ -538,6 +538,30 @@ function dips(spans, n) {
   return ranges;
 }
 
+// How loud a sound is over `spans` alone ([from, to] in seconds): the
+// spans laid end to end, and over again until they make 3 s, so the meter
+// has its 400 ms blocks to read even when they are short clicks.
+// -Infinity where it is silent.
+async function levelOver(audio, spans) {
+  const parts = spans.map(([from, to]) => [Math.max(0, Math.round(from * RATE)), Math.min(audio.L.length, Math.round(to * RATE))]).filter(([a, b]) => b > a);
+  const n = parts.reduce((sum, [a, b]) => sum + (b - a), 0);
+  if (!n) return -Infinity;
+  const total = Math.max(n, 3 * RATE);
+  const L = new Float32Array(total);
+  const R = new Float32Array(total);
+  for (let at = 0; at < total; ) {
+    for (const [a, b] of parts) {
+      const take = Math.min(b - a, total - at);
+      if (take <= 0) break;
+      L.set(audio.L.subarray(a, a + take), at);
+      R.set(audio.R.subarray(a, a + take), at);
+      at += take;
+    }
+    await breathe();
+  }
+  return (await measure({ L, R })).integrated;
+}
+
 // Sets a sound, with one gain over the whole of it, so it reads `lufs`
 // where it plays: over its spans and the music's dip around each, where a
 // meter reads even its shortest click over 400 ms, as a listener hears it
@@ -563,4 +587,4 @@ async function setWhere(audio, spans, lufs) {
   return gain;
 }
 
-module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, setWhere, scale, attackNear };
+module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, levelOver, setWhere, scale, attackNear };

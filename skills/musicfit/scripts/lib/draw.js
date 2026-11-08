@@ -239,8 +239,8 @@ function legendOf(cues) {
   return marks;
 }
 
-// Where the music dips under the video's own sound, with --video-sound keep
-// or voice.
+// Where the music dips under the video's own sound, with --video-sound
+// voice.
 const ownSpans = (cues) => (cues.video && cues.video.duck !== null && cues.video.spans) || [];
 
 // cues: what report.cues() returns; source, fitted: { L, R } at `rate`.
