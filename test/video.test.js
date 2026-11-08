@@ -479,3 +479,17 @@ test("a track, a voice and a video named like 16:9 mix.wav or 9:16.mp4 are read 
   assert.deepEqual(fs.readdirSync(path.join(cwd, "fit")).sort(), ["FIT.md", "cues.json", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
   assert.deepEqual(packets(path.join(cwd, "fit", "video.mp4")), packets(path.join(cwd, "9:16.mp4")));
 });
+
+test("a whole video whose name or tags hold the words ffmpeg prints for a damaged file is not taken for a damaged one", async () => {
+  const { probe } = require("../skills/musicfit/scripts/lib/video");
+  const named = at("partial file.mp4");
+  fs.copyFileSync(film("mute"), named);
+  const tagged = at("tagged.mp4");
+  ffmpeg(["-i", film("mute"), "-c", "copy", "-metadata", "title=Packet corrupt input packet in stream 0", "-metadata", "comment=File ended prematurely", tagged]);
+  for (const file of [named, tagged]) {
+    const info = await probe(file);
+    assert.deepEqual([info.seconds, info.frames], [12, 300], file);
+  }
+  const run = cli([fixture("house").file, "--length", "12", "--video", named, "--out", at("partial-file-fit")]);
+  assert.equal(run.status, 0, run.stderr);
+});
