@@ -210,6 +210,10 @@ const round1 = (x) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : null);
 // under, there was room for more, and over it they were not held at all.
 const heldAtCeiling = (truePeak) => truePeak !== null && truePeak <= -1 && truePeak >= -1.5;
 
+// A first bar this close to the top of the file, on either side of it, is on
+// the top, as near as anyone hears.
+const ON_THE_BAR = 0.02;
+
 // How the fitted file opens: on its first bar at the top (top), as the
 // track does, or later in the track (later), as a fit too short for the
 // track's opening and its ending both can, on its first bar or just before
@@ -219,8 +223,8 @@ const heldAtCeiling = (truePeak) => truePeak !== null && truePeak <= -1 && trueP
 function startKind(a, p, r) {
   const head = r.head;
   const first = p.segments[0].firstBar;
-  if (head < -0.005) return { kind: "mid-bar", music: 0 };
-  if (head <= 0.005) return { kind: r.startSource > a.start.audible + 0.02 ? "later" : "top", music: 0 };
+  if (head < -ON_THE_BAR) return { kind: "mid-bar", music: 0 };
+  if (head <= ON_THE_BAR) return { kind: r.startSource > a.start.audible + 0.02 ? "later" : "top", music: 0 };
   if (first === a.start.firstBar) {
     if (a.start.pickup > 0.05) return { kind: "pickup", music: r3(Math.max(0, head - a.start.pickup)) };
     return { kind: "silence", music: r3(head) };
@@ -234,7 +238,7 @@ function startKind(a, p, r) {
 
 const sec = (t) => `${t.toFixed(2)} s`;
 
-function fitMarkdown(c, { trackName }) {
+function fitMarkdown(c, { trackName, head = 0 }) {
   const lines = [];
   lines.push(`# ${trackName} fitted to ${sec(c.length)}`, "");
   // The music dips under a voice, or under the video's own sound.
@@ -259,7 +263,7 @@ function fitMarkdown(c, { trackName }) {
   lines.push("");
 
   lines.push("## Where to listen", "", "| Time | Frame | What | Why |", "| --- | --- | --- | --- |");
-  const rows = [{ time: 0, frame: 0, what: "start", why: startText(c) }];
+  const rows = [{ time: 0, frame: 0, what: "start", why: startText(c, head) }];
   c.seams.forEach((s, i) => {
     const amount = s.bars !== null ? `${s.bars} ${s.bars === 1 ? "bar" : "bars"}` : sec(s.seconds);
     const how = s.kind === "cut" ? `${amount} of the track skipped (${sec(s.source.from)} to ${sec(s.source.to)} there)` : `back ${amount}, so ${s.bars !== null ? "they play" : "that part plays"} again (${sec(s.source.from)} back to ${sec(s.source.to)} there)`;
@@ -362,15 +366,16 @@ function dipsUnder(v) {
   return `, the music dipping ${lo === hi ? hi : `${lo} to ${hi}`} dB under ${which}`;
 }
 
-function startText(c) {
+// How the fitted file opens, in words. `head` is where the first bar it plays
+// is in the file.
+function startText(c, head) {
   const s = c.start;
   const first = s.firstBar ? `${sec(s.firstBar.time)}` : "";
   if (s.kind === "top") return "the music starts at the top, as the track does";
   if (s.kind === "later") {
     const bars = c.segments[0].sourceBars;
     const at = sec(c.segments[0].source[0]);
-    // A head of a few milliseconds is on the bar, as near as anyone hears.
-    const lead = s.firstBar && s.firstBar.time > 0.02 ? `${sec(s.firstBar.time)} before` : "on";
+    const lead = s.firstBar && head > ON_THE_BAR ? `${sec(s.firstBar.time)} before` : "on";
     return `the music starts ${bars ? `${lead} bar ${bars[0]} of the track (${at} there)` : `${at} into the track`}, not at its top`;
   }
   if (s.kind === "silence") return `silence, then the music comes in on its first bar at ${first}`;

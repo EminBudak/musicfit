@@ -239,6 +239,37 @@ test("a short fit of a track whose first bar comes a moment in starts later too,
   assert.equal(cues.start.kind, "swell");
 });
 
+test("a first bar within 20 ms of the top of the fit is on the top, on either side of it, however the hit moved it; further off it is what it was", async () => {
+  const { file } = fixture("house");
+  // Where the drop is in the track, as the run reads it.
+  const seen = await fit(file, { ...defaults, length: 30, hit: 16, out: outDir("on-the-bar-first") });
+  const drop = seen.cues.drop.source;
+  // Each hit moves the whole track, first bar included, by that much from
+  // where it plays when the drop is at its own place in the track.
+  for (const [shift, kind, words] of [[-0.012, "top", "the music starts at the top, as the track does"], [0.009, "top", "the music starts at the top, as the track does"], [-0.06, "mid-bar", "the music starts part way into a bar"]]) {
+    const out = outDir(`on-the-bar${shift}`);
+    const { cues } = await fit(file, { ...defaults, length: 30, hit: drop + shift, out });
+    assert.equal(cues.segments[0].sourceBars[0], 1, String(shift));
+    assert.equal(cues.start.kind, kind, `${shift}: ${JSON.stringify(cues.start)} ${JSON.stringify(cues.segments[0])}`);
+    assert.ok(fs.readFileSync(path.join(out, "FIT.md"), "utf8").includes(`| 0.00 s | 0 | start | ${words}`), String(shift));
+  }
+});
+
+test("a hit that puts a later bar within 20 ms of the top says the music starts on that bar", async () => {
+  const { file } = fixture("offbeat");
+  const seen = await fit(file, { ...defaults, length: 12, hit: 6, out: outDir("later-on-the-bar-first") });
+  // How far into its bar the drop lands.
+  const into = seen.cues.drop.source - seen.analysis.bars[seen.cues.drop.sourceBar - 1].start;
+  // The drop's bar a bar into the fit, so the bar before it is at the top of the file, a hair early.
+  const out = outDir("later-on-the-bar");
+  const { cues } = await fit(file, { ...defaults, length: 12, hit: seen.analysis.tempo.bar + into - 0.012, out });
+  assert.equal(cues.start.kind, "later", JSON.stringify(cues.start));
+  const bar = cues.segments[0].sourceBars[0];
+  assert.equal(bar, seen.cues.drop.sourceBar - 1);
+  const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
+  assert.ok(md.includes(`| 0.00 s | 0 | start | the music starts on bar ${bar} of the track (${cues.segments[0].source[0].toFixed(2)} s there), not at its top |`), md);
+});
+
 test("ducked under a voice: the music dips about --duck dB where it speaks, and mix.wav has both", async () => {
   const { file } = fixture("house");
   const vo = fixture("voice");

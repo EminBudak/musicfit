@@ -448,7 +448,7 @@ async function make(track, options, run, video, writes) {
   await encodeWav(music, run.file("fitted.wav"));
   removes();
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice, video: laid });
-  fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName }));
+  fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName, head: r.head }));
   fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
   await record(run, c);
   return { cues: c, analysis: a, plan: p };
