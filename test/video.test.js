@@ -1236,6 +1236,19 @@ test("the run's own files are read by their names from their own folder, so an o
   assert.ok(Number.isFinite(heard.integrated), "video.mp4 has no sound");
 });
 
+test("an ffmpeg found through a relative entry of PATH is found by every call, also those that run in the out folder", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const { file } = fixture("house");
+  // A stand-in for ffmpeg in a folder PATH names from where musicfit starts.
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  const bin = at("relative-bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, "ffmpeg"), `#!/bin/sh\nexec "${real}" "$@"\n`, { mode: 0o755 });
+  const { FFMPEG_PATH, ...rest } = process.env;
+  const run = spawnSync(process.execPath, [CLI, file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", at("relative-path-fit")], { cwd: dir, encoding: "utf8", env: { ...rest, PATH: `no-such-folder${path.delimiter}relative-bin` } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(fs.existsSync(at("relative-path-fit/video.mp4")));
+});
+
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
   const { fitMarkdown, underVideo } = require("../skills/musicfit/scripts/lib/report");
   const base = {

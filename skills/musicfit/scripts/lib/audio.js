@@ -21,6 +21,15 @@ function ffmpegPath() {
   return path.basename(named) === named ? named : path.resolve(named);
 }
 
+// The environment for a call run in another folder: a relative entry of PATH
+// reads from that folder when ffmpeg is looked up, so every entry is written
+// from where musicfit was started. An empty entry is the current folder.
+function fromHere() {
+  const key = Object.keys(process.env).find((name) => name.toUpperCase() === "PATH");
+  if (!key) return process.env;
+  return { ...process.env, [key]: process.env[key].split(path.delimiter).map((entry) => path.resolve(entry)).join(path.delimiter) };
+}
+
 // A file as ffmpeg is given it: by its full path, since ffmpeg takes a name
 // whose part before a colon is all letters and digits (9:16.mp4) for a
 // protocol, and never a full path.
@@ -109,7 +118,7 @@ function run(args, input, { writes = null, cwd } = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(ffmpegPath(), ["-hide_banner", ...(input ? [] : ["-nostdin"]), ...args], { cwd, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
+      child = spawn(ffmpegPath(), ["-hide_banner", ...(input ? [] : ["-nostdin"]), ...args], { cwd, env: cwd ? fromHere() : process.env, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
     } catch (err) {
       reject(err);
       return;
