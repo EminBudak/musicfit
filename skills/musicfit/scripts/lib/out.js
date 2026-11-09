@@ -76,15 +76,41 @@ const isFile = (at) => {
   return Boolean(s) && !s.isDirectory();
 };
 
-// The musicfit cues.json in `dir`, or null.
-function cuesIn(dir) {
+// The text of a small file of its own, or null for anything else: a link
+// is not followed out of its folder, and a pipe or a device is never opened
+// to wait on, which would hold the run where no stop is heard.
+function readSmall(at, most = 16 << 20) {
+  const s = lstat(at);
+  if (!s || !s.isFile() || s.size > most) return null;
+  const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
+  let fd;
   try {
-    const c = JSON.parse(fs.readFileSync(path.join(dir, "cues.json"), "utf8"));
+    fd = fs.openSync(at, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    const t = fs.fstatSync(fd);
+    if (!t.isFile() || t.size > most) return null;
+    const bytes = Buffer.alloc(t.size);
+    let got = 0;
+    for (let n; got < bytes.length && (n = fs.readSync(fd, bytes, got, bytes.length - got, got)); ) got += n;
+    return bytes.toString("utf8", 0, got);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// The musicfit cues.json at `at`, or null.
+function cuesAt(at) {
+  try {
+    const c = JSON.parse(readSmall(at));
     return c && typeof c === "object" && c.musicfit ? c : null;
   } catch {
     return null;
   }
 }
+
+// The musicfit cues.json in `dir`, or null.
+const cuesIn = (dir) => cuesAt(path.join(dir, "cues.json"));
 
 // The files a musicfit run wrote in `dir`, as its cues.json lists them:
 // cues.json, seams.png and FIT.md always, fitted.wav for a fit, mix.wav
@@ -126,14 +152,8 @@ function earlier(dir) {
 
 // How many line ends of a text file are CR LF.
 function crlf(at) {
-  let n = 0;
-  try {
-    const bytes = fs.readFileSync(at);
-    for (let i = 1; i < bytes.length; i++) if (bytes[i] === 10 && bytes[i - 1] === 13) n++;
-  } catch {
-    // Read as none.
-  }
-  return n;
+  const text = readSmall(at, 1 << 20) || "";
+  return text.split("\r\n").length - 1;
 }
 
 // Whether two paths name one file, however each is reached.
@@ -355,14 +375,9 @@ function lock(at) {
 // machine, it names none and was made a while ago, or it has been held far
 // longer than any commit takes.
 function staleLock(at) {
-  let text;
-  let s;
-  try {
-    text = fs.readFileSync(at, "utf8");
-    s = fs.statSync(at);
-  } catch {
-    return null;
-  }
+  const s = lstat(at);
+  const text = readSmall(at, 4096);
+  if (!s || text === null) return null;
   const [host, pid] = text.trim().split(" ");
   const named = Boolean(host) && Number(pid) > 0;
   const gone = named && host === os.hostname() && !running(Number(pid));
@@ -451,6 +466,10 @@ async function place(state) {
       if (staleLock(at) === stale) fs.rmSync(at, { force: true });
       continue;
     }
+    // A folder or a pipe under the lock's name is no lock a run made, and
+    // waiting does not make it one.
+    const s = lstat(at);
+    if (s && !s.isFile()) throw failed(`${path.join(state.dir, LOCK)} is not a file musicfit made, so this run cannot take its turn there: move it`);
     if (Date.now() - started > LOCK_WAIT) throw failed(`another musicfit run has been putting its files there for ${LOCK_WAIT / 1000} s`);
     await pause(25);
   }
@@ -688,4 +707,4 @@ function sweep(folder) {
   }
 }
 
-module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier, listed, sameFile };
+module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier, listed, sameFile, cuesAt };

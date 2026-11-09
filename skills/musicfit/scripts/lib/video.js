@@ -44,7 +44,10 @@ const MARK = /^musicfit \S+: a fitted track laid under this picture$/;
 function marked(file) {
   let fd;
   try {
-    fd = fs.openSync(file, "r");
+    // Not through a link, and never waiting on a pipe.
+    const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
+    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (!fs.fstatSync(fd).isFile()) return false;
     const head = Buffer.alloc(16);
     // The first box of `type` in [start, end): where its content starts and
     // where it ends. A size of 1 is followed by a 64-bit one, and 0 runs to

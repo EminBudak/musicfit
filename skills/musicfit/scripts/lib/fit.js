@@ -16,7 +16,7 @@ const { plan } = require("./plan");
 const { assemble, speech, BLIP, floorOf, duck, normalize, setOver, cameOut, setWhere, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
-const { claim, begin, sameFile } = require("./out");
+const { claim, begin, sameFile, cuesAt } = require("./out");
 const { blocks } = require("./breathe");
 const version = require("./version");
 
@@ -183,15 +183,11 @@ async function readVideo(track, o) {
 }
 
 // The video a musicfit video.mp4 was made from, as the cues.json beside it
-// says, when that cues.json is musicfit's and lists it.
+// says, when that cues.json is musicfit's, a file of its own, and lists it.
 function madeFrom(file) {
-  try {
-    const c = JSON.parse(fs.readFileSync(path.join(path.dirname(file), "cues.json"), "utf8"));
-    const v = c && c.musicfit && c.video;
-    return v && v.file === path.basename(file) && typeof v.source === "string" && v.source ? v.source : null;
-  } catch {
-    return null;
-  }
+  const c = cuesAt(path.join(path.dirname(file), "cues.json"));
+  const v = c && c.video;
+  return v && v.file === path.basename(file) && typeof v.source === "string" && v.source ? v.source : null;
 }
 
 // A number of decibels as written: 5, 7.5.

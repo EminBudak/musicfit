@@ -1093,3 +1093,68 @@ test("a track or a voice named like the words for a full disk is not taken for o
   assert.equal(voice.stderr.split("\n").filter(Boolean).pop(), "musicfit: Cannot read No space left on device.wav: ffmpeg does not know this format");
   assert.deepEqual(fs.readdirSync(cwd).sort(), ["Disk quota exceeded.wav", "No space left on device.wav"]);
 });
+
+test("a cues.json, a lock or the cues.json beside a video that is a pipe or a link is never read, so it holds no run and vouches for no file", posix, async () => {
+  const { file } = fixture("house");
+  const mkfifo = (at) => assert.equal(spawnSync("mkfifo", [at]).status, 0, `mkfifo ${at}`);
+  // Runs the CLI, and stops it if it has not ended within 20 s.
+  const bounded = (args) =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, [CLI, ...args]);
+      let stderr = "";
+      child.stderr.on("data", (d) => (stderr += d));
+      const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
+      child.on("exit", (code, signal) => {
+        clearTimeout(timer);
+        resolve({ code, signal, stderr });
+      });
+    });
+  // A pipe under cues.json's name is no file musicfit wrote: refused at once.
+  const piped = outDir("piped-cues");
+  fs.mkdirSync(piped);
+  mkfifo(path.join(piped, "cues.json"));
+  const run = await bounded([file, "--length", "12", "--out", piped]);
+  assert.equal(run.code, 1, `${run.signal} ${run.stderr}`);
+  assert.match(run.stderr, new RegExp(`musicfit: ${quote(path.join(piped, "cues.json"))} is not a file musicfit wrote, and this run would replace it: move it, or give another --out\n$`));
+  // So is a link to one, or to another fit's cues.json, which vouches for
+  // nothing here: the user's fitted.wav stays.
+  const linked = outDir("linked-cues");
+  fs.mkdirSync(linked);
+  fs.symlinkSync(path.join(piped, "cues.json"), path.join(linked, "cues.json"));
+  const throughLink = await bounded([file, "--length", "12", "--out", linked]);
+  assert.equal(throughLink.code, 1, `${throughLink.signal} ${throughLink.stderr}`);
+  const other = goodFit("linked-cues-source");
+  const vouched = outDir("linked-cues-vouched");
+  fs.mkdirSync(vouched);
+  fs.copyFileSync(file, path.join(vouched, "fitted.wav"));
+  fs.symlinkSync(path.join(other, "cues.json"), path.join(vouched, "cues.json"));
+  const before = snapshot(vouched);
+  const mine = await bounded([file, "--length", "12", "--out", vouched]);
+  assert.equal(mine.code, 1, mine.stderr);
+  assert.match(mine.stderr, /holds fitted\.wav and cues\.json, which musicfit did not write/);
+  assert.deepEqual(snapshot(vouched), before);
+
+  // A pipe under the lock's name makes the commit fail at once.
+  const locked = goodFit("piped-lock");
+  const earlier = snapshot(locked);
+  mkfifo(path.join(locked, out.LOCK));
+  const commit = out.begin(locked);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(commit.file(name), `new ${name}\n`);
+  const started = Date.now();
+  await assert.rejects(commit.commit(), new RegExp(`Could not put the new files in ${quote(locked)}: ${quote(path.join(locked, out.LOCK))} is not a file musicfit made, so this run cannot take its turn there: move it\\. ${quote(locked)} is as it was\\.`));
+  assert.ok(Date.now() - started < 5000, `the commit waited ${Date.now() - started} ms`);
+  fs.rmSync(path.join(locked, out.LOCK));
+  assert.deepEqual(snapshot(locked), earlier);
+
+  // A pipe beside a video musicfit made, where its cues.json would be.
+  const film = path.join(dir, "piped-beside-film.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-f", "lavfi", "-i", "sine=f=440:d=12", "-c:v", "mpeg4", "-c:a", "aac", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const fitted = outDir("piped-beside");
+  assert.equal(cli([file, "--length", "12", "--video", film, "--video-sound", "keep", "--out", fitted]).status, 0);
+  fs.rmSync(path.join(fitted, "cues.json"));
+  mkfifo(path.join(fitted, "cues.json"));
+  const again = await bounded([file, "--length", "12", "--video", path.join(fitted, "video.mp4"), "--video-sound", "keep", "--out", outDir("piped-beside-again")]);
+  assert.equal(again.code, 1, `${again.signal} ${again.stderr}`);
+  assert.match(again.stderr, /musicfit: video\.mp4 is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from, or --video-sound drop to leave that sound out\n$/);
+});
