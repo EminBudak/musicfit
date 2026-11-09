@@ -203,11 +203,16 @@ function sourceOf(a) {
 
 const round1 = (x) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : null);
 
+// How the fitted file opens: on its first bar at the top (top), as the
+// track does, or later in the track (later), as a fit too short for the
+// track's opening and its ending both can; after silence or the track's
+// own lead in (silence, pickup); with the end of the bar before fading in
+// (swell); or part way into a bar (mid-bar).
 function startKind(a, p, r) {
   const head = r.head;
   const first = p.segments[0].firstBar;
   if (head < -0.005) return { kind: "mid-bar", music: 0 };
-  if (head <= 0.005) return { kind: "top", music: 0 };
+  if (head <= 0.005) return { kind: r.startSource > a.start.audible + 0.02 ? "later" : "top", music: 0 };
   if (first === a.start.firstBar) {
     if (a.start.pickup > 0.05) return { kind: "pickup", music: r3(Math.max(0, head - a.start.pickup)) };
     return { kind: "silence", music: r3(head) };
@@ -338,6 +343,10 @@ function startText(c) {
   const s = c.start;
   const first = s.firstBar ? `${sec(s.firstBar.time)}` : "";
   if (s.kind === "top") return "the music starts at the top, as the track does";
+  if (s.kind === "later") {
+    const first = c.segments[0];
+    return `the music starts ${first.sourceBars ? `on bar ${first.sourceBars[0]} of the track (${sec(first.source[0])} there)` : `${sec(first.source[0])} into the track`}, not at its top`;
+  }
   if (s.kind === "silence") return `silence, then the music comes in on its first bar at ${first}`;
   if (s.kind === "pickup") return `the track's own lead in, with the first bar at ${first}`;
   if (s.kind === "swell") return `the end of the bar before fades in over ${sec(s.fadeIn)}, into the first full bar at ${first}`;

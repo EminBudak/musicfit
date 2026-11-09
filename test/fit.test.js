@@ -142,6 +142,20 @@ test("with no hit it opens as the track opens and ends on the track's own last h
   assert.ok(cues.hits.includes(cues.end.finalHit.frame));
 });
 
+test("a fit too short for the track's opening and its ending both can start later in the track, and FIT.md says where", async () => {
+  // Ten seconds of a track whose own ending takes most of them: the fit is
+  // its last bars.
+  const { file } = fixture("offbeat");
+  const out = outDir("offbeat-10");
+  const { cues } = await fit(file, { ...defaults, length: 10, out });
+  assert.equal(cues.start.kind, "later");
+  const [from] = cues.segments[0].source;
+  assert.ok(from > 1, `the fit starts ${from} s into the track`);
+  const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
+  assert.ok(md.includes(`| 0.00 s | 0 | start | the music starts on bar ${cues.segments[0].sourceBars[0]} of the track (${from.toFixed(2)} s there), not at its top |`), md);
+  assert.doesNotMatch(md, /as the track does/);
+});
+
 test("ducked under a voice: the music dips about --duck dB where it speaks, and mix.wav has both", async () => {
   const { file } = fixture("house");
   const vo = fixture("voice");
