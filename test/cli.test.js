@@ -199,6 +199,7 @@ test("--duck, --lufs, --bpm and --meter take numbers as people write them: a bla
   for (const [flag, message] of [["--duck", /--duck takes 0 to 40 dB/], ["--lufs", /--lufs takes -40 to -5/], ["--bpm", /--bpm takes 40 to 250/], ["--meter", /--meter takes 3 or 4/]]) {
     for (const value of [" ", "0x10", "1e1", "-1e1", "Infinity", "12abc"]) assert.throws(() => parse(["song.mp3", "--length", "30", flag, value]), message, `${flag} ${JSON.stringify(value)}`);
   }
+  for (const value of ["3/x", "3/", "3/4/5", "/4", "x/4"]) assert.throws(() => parse(["song.mp3", "--length", "30", "--meter", value]), /--meter takes 3 or 4/, value);
   const read = (flag, value) => parse(["song.mp3", "--length", "30", flag, value]);
   assert.equal(read("--duck", "6").duck, 6);
   assert.equal(read("--duck", "-6").duck, 6);
@@ -208,6 +209,8 @@ test("--duck, --lufs, --bpm and --meter take numbers as people write them: a bla
   assert.equal(read("--lufs", "-16").lufs, -16);
   assert.equal(read("--bpm", "124.5").bpm, 124.5);
   assert.equal(read("--meter", "3/4").meter, 3);
+  assert.equal(read("--meter", "6/8").meter, 6);
+  assert.equal(read("--meter", "4").meter, 4);
   // A hyphen starts a number here, not a flag.
   assert.equal(parse(["song.mp3", "--length", "30", "--lufs", "-9.5"]).lufs, -9.5);
 });

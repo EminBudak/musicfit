@@ -150,7 +150,9 @@ function parse(argv) {
     if (!(options.bpm >= 40 && options.bpm <= 250)) throw new Error("--bpm takes 40 to 250");
   }
   if (raw.meter !== undefined) {
-    options.meter = number(String(raw.meter).split("/")[0]);
+    // A number of beats, or that over a note value: 3 or 3/4.
+    const beats = /^([^/]*?)(?:\/\d+\s*)?$/.exec(raw.meter);
+    options.meter = beats ? number(beats[1]) : NaN;
     if (![2, 3, 4, 6].includes(options.meter)) throw new Error("--meter takes 3 or 4 (also 2 or 6)");
   }
   if (!options.analyze && raw.length === undefined) throw new Error("Give --length, the length of your cut, or --analyze to only read the track");
