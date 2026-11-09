@@ -737,7 +737,8 @@ async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1
           for (const side of ["up", "down"]) {
             const o = ownReach[side][c][b];
             if (!(o > 0.01 * peak)) continue;
-            const left = top - g * musicReach[side][c][b] - (alsoReach ? alsoReach[side][c][b] : 0);
+            // The music can end a frame before the picture does.
+            const left = top - g * (musicReach[side][c][b] || 0) - (alsoReach ? alsoReach[side][c][b] || 0 : 0);
             best = Math.min(best, Math.max(0, left) / o);
           }
         }

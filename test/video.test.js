@@ -448,6 +448,43 @@ test("an impact on the drop, whose peaks stand 11 dB over its loudness, comes ou
   assert.match(run2.stdout, new RegExp(`Note {4}boom\\.mp4's own sound is less than 3 dB louder than the music where it plays, at 8\\.00 s \\([^)]*\\): a place is set no louder than -8 LUFS, 6 dB over the target, nor than keeps its true peaks, with the music's, under -1 dBTP, and the music dips under it by 2 dB at most, as --duck says\\. A larger --duck lets the music dip further there\\.\\n`));
 });
 
+// The level of [from, to] s of a K-weighted sound, in LUFS, and its energy
+// on that scale.
+function windowEnergy(x, from, to) {
+  const a = Math.round(from * RATE);
+  const b = Math.min(x.length, Math.round(to * RATE));
+  let sum = 0;
+  for (let i = a; i < b; i++) sum += x[i] * x[i];
+  return (2 * sum) / (b - a);
+}
+const lufsOf = (energy) => -0.691 + 10 * Math.log10(energy + 1e-12);
+
+test("a sound effect that runs to the end of a video a little longer than --length, within a frame, is kept like any other", async () => {
+  const fx = wav("fxend", 12, (x) => {
+    let seed = 13;
+    for (const [from, to] of [[2, 2.3], [11.5, 12]]) {
+      for (let i = Math.round(from * RATE); i < Math.round(to * RATE); i++) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        x[i] = (seed / 2147483648 - 0.5) * 0.3;
+      }
+    }
+  });
+  const video = film("fxend", { sound: fx });
+  const out = at("fxend-keep");
+  const run = cli([fixture("house").file, "--length", "11.98", "--hit", "8", "--video", video, "--video-sound", "keep", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const c = cuesOf(out);
+  assert.equal(c.video.spans.length, 2);
+  const heard = weighted(mono(await decode(path.join(out, "video.mp4"))));
+  const last = c.video.spans[1];
+  assert.doesNotMatch(run.stdout, /Infinity|NaN|-120/);
+  // As loud as a place at the target can be, where almost no music plays.
+  const level = lufsOf(windowEnergy(heard, last.from, 11.95));
+  assert.ok(Math.abs(level + 14) <= 3, `the last place reads ${level.toFixed(1)} LUFS`);
+  const whole = await measureFile(path.join(out, "video.mp4"));
+  assert.ok(Number.isFinite(whole.integrated) && whole.integrated > -16, `${whole.integrated} LUFS`);
+});
+
 test("the same sound effect inside the closing fade and just after the music has ended comes out about as loud, the one in the fade not pushed down with the music there", async () => {
   // Where the fade runs in this fit, read from a fit without the video:
   // from 11.6 s to the last beat before the end, 13.5 s.
