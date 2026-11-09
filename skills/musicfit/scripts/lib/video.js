@@ -56,6 +56,20 @@ function inputSection(said) {
   return to < 0 ? rest : rest.slice(0, to);
 }
 
+// What ffmpeg says of an MP4 or a MOV with no whole index: none found, or
+// one that stops part way.
+const NO_INDEX = /moov atom not found|^\[mov,[^\]\n]*\] error reading header/m;
+
+// Whether ffmpeg, on a file with no picture, lists no stream it could tell
+// anything of. A file that stops early in its index lists none at all, or
+// one it knows nothing about, not even a kind: "Data: none".
+function noStreams(said) {
+  const streams = inputSection(said)
+    .split("\n")
+    .filter((line) => /^\s*Stream #0:\d+/.test(line));
+  return streams.every((line) => /: Data: none(?: \(default\))?\s*$/.test(line));
+}
+
 // The video's picture as its packets give it: how long it is, its frames,
 // its frame rate and whether that holds steady, the codec of its picture
 // and of its first sound stream, how many sound and subtitle streams it has,
@@ -68,6 +82,7 @@ async function probe(file) {
   const name = path.basename(file);
   const size = (fs.statSync(file, { throwIfNoEntry: false }) || {}).size;
   if (size === 0) throw new Error(`Cannot read ${file}: it is empty`);
+  const cutShort = (what) => new Error(`Cannot read ${file}: it is cut short or damaged, so ffmpeg finds no ${what} in it`);
   let crc;
   let said;
   try {
@@ -77,11 +92,15 @@ async function probe(file) {
   } catch (err) {
     const why = err.stderr || err.message;
     if (/No such file|does not exist/.test(why)) throw new Error(`Cannot read ${file}: no such file`);
-    // An MP4 or a MOV that stops before its index, as one whose recording
-    // or download was cut off; a file ffmpeg only guessed was one is not.
-    if (/moov atom not found/.test(why) && !/detected only with low score/.test(why)) throw new Error(`Cannot read ${file}: it is cut short or damaged, so ffmpeg finds no index in it`);
+    // An MP4 or a MOV that stops before its index or inside it, as one whose
+    // recording or download was cut off; a file ffmpeg only guessed was one
+    // is not.
+    if (NO_INDEX.test(why) && !/detected only with low score/.test(why)) throw cutShort("index");
     if (/Invalid data found|moov atom not found/.test(why)) throw new Error(`Cannot read ${file}: ffmpeg does not know this format`);
-    if (/matches no streams/.test(why)) throw new Error(`${name} has no picture to lay the music under`);
+    if (/matches no streams/.test(why)) throw noStreams(why) ? cutShort("streams") : new Error(`${name} has no picture to lay the music under`);
+    // A picture ffmpeg 4.4 will not even start to copy, as nothing is known
+    // of it yet where the index stops; ffmpeg 8 copies none of its frames.
+    if (/^\s*Stream #0:\d+.*: Video: none, none/m.test(inputSection(why))) throw cutShort("frames");
     throw err;
   }
 
@@ -144,6 +163,9 @@ async function probe(file) {
     const whole = d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0;
     throw new Error(`Cannot read ${file}: it is cut short or damaged (ffmpeg could read ${frames} ${frames === 1 ? "frame" : "frames"}, ${seconds.toFixed(2)} s${whole > seconds + 0.05 ? ` of the ${whole.toFixed(2)} s it says it holds` : ""})`);
   }
+  // A still picture has its one frame; an index cut short can list a picture
+  // with no frame of it.
+  if (!frames) throw cutShort("frames");
   if (frames <= 1 || /^(image2|image2pipe|\w+_pipe)$/.test(format) || !(seconds > 0) || !step) throw new Error(`${name} is a still picture, not a video`);
   // The rate holds steady when every gap is a whole number of steps, give
   // or take a tick of the timebase or a millisecond (a 29.97 fps video in a

@@ -826,6 +826,41 @@ test("a video that cannot take the fit is refused before any work, and no folder
   assert.deepEqual(fs.readdirSync(dir).filter((e) => e.startsWith(".musicfit-")), []);
 });
 
+test("an MP4 cut short inside its index is said to be, wherever in the index it stops, and one that lacks only the end of its index goes through", () => {
+  const whole = film("film12", {});
+  const bytes = fs.readFileSync(whole);
+  // The top-level boxes, to find the index, which comes last in this file.
+  let moov = 0;
+  while (bytes.toString("latin1", moov + 4, moov + 8) !== "moov") moov += bytes.readUInt32BE(moov);
+  const inside = (tag, past) => bytes.indexOf(tag, moov, "latin1") + past;
+  const cuts = [
+    // Before anything of it is read: no stream is listed.
+    ["just inside", moov + 10, "streams"],
+    // A stream ffmpeg knows nothing of yet.
+    ["in tkhd", inside("tkhd", 20), "streams"],
+    // A picture known only by its handler: ffmpeg 4.4 will not copy it, ffmpeg 8 copies no frame of it.
+    ["in hdlr", inside("hdlr", 30), "frames"],
+    // Past that, ffmpeg gives up on the header.
+    ["in stsd", inside("stsd", 12), "index"],
+    ["in stts", inside("stts", 6), "index"],
+    ["in stsz", inside("stsz", 20), "index"],
+  ];
+  for (const [where, size, what] of cuts) {
+    const video = at(`cut-index ${where}.mp4`);
+    fs.writeFileSync(video, bytes.subarray(0, size));
+    const out = at(`refused-index-${where}`);
+    const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", video, "--out", out]);
+    assert.equal(run.status, 1, `${where}: ${run.stderr}`);
+    assert.equal(run.stderr, `musicfit: Cannot read ${video}: it is cut short or damaged, so ffmpeg finds no ${what} in it\n`, where);
+    assert.ok(!fs.existsSync(out), where);
+  }
+  // ffmpeg has all it needs: the last bytes are the file's tags.
+  const nearly = at("cut-index tags.mp4");
+  fs.writeFileSync(nearly, bytes.subarray(0, bytes.length - 8));
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--video", nearly, "--out", at("index-tags-fit")]);
+  assert.equal(run.status, 0, run.stderr);
+});
+
 test("a video musicfit made is refused as --video while its sound would be laid in, naming the video it was made from when its cues.json is beside it, and taken with --video-sound drop", () => {
   const out = at("remade");
   const source = film("film25", { sound: effects() });
