@@ -343,14 +343,15 @@ async function make(track, options, run, video, writes) {
     // dips, the voice, and the video's own sound. With voice, that sound is
     // set to the target where it plays, as a voice is, and the music dips
     // under it. With keep, each place it plays is set KEEP_OVER dB louder
-    // than the music there, never quieter than the target nor more than
-    // KEEP_MOST dB louder than it (setOver in render.js), raising quiet
-    // sound effects and turning loud ones down, while the music plays on
-    // at its level. A sound with nothing in it that stands out, a faint
-    // room tone, is only turned down, to the target when it is louder, so
-    // it stays faint against the music. Then the whole is set to the
-    // target, which moves them all by the same amount. The video's own
-    // sound, read as long as the picture, is where the rest is added in.
+    // than the music there, between the target and KEEP_MOST dB over it,
+    // and where music plays no louder than its peaks allow (setOver in
+    // render.js), raising quiet sound effects and turning loud ones down,
+    // while the music plays on at its level. A sound with nothing in it
+    // that stands out, a faint room tone, is only turned down, to the
+    // target when it is louder, so it stays faint against the music. Then
+    // the whole is set to the target, which moves them all by the same
+    // amount. The video's own sound, read as long as the picture, is where
+    // the rest is added in.
     const total = Math.round(picture.seconds * RATE);
     let under = video.own;
     video.own = null;

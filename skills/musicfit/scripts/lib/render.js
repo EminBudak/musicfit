@@ -622,15 +622,15 @@ const PEAK = 5;
 // --video-sound keep: each place where the video's own sound plays
 // ([from, to] in seconds) is set `over` dB louder than the music there, both
 // read over that place, so a sound effect stands out without the music
-// dipping under it. A place is never set quieter than the target, so one
-// over quiet music or none is at the target, and never more than `most` dB
-// louder than the target, so one over the loudest music is not raised so
-// far that the limiter holding the whole has to pull it and the music down
-// again. Where music plays, a place is not raised past the gain that brings
-// its own peak to PEAK either: a click, or short clicks far apart that read
-// quiet over their place, raised to their level would have the limiter pull
-// the music down around each. Such places stand less than `over` dB over
-// the music.
+// dipping under it. That level is kept between the target and `most` dB
+// over it, so a place where no music plays is at the target, and one over
+// the loudest music is not raised so far that the limiter holding the whole
+// has to pull it and the music down again. Where music plays, a place is
+// not raised past the gain that brings its own peak to PEAK either, and
+// that limit comes last: a click, or short clicks far apart that read quiet
+// over their place, raised to their level would have the limiter pull the
+// music down around each. So a sharp sound can stay under the target, or
+// less than `over` dB over the music.
 // The gain holds over each place and for up to 0.5 s after it, so its tail
 // keeps the same level, then turns to the next place's along an S-curve
 // that ends 10 ms before it. Returns each place with the gain it got and
