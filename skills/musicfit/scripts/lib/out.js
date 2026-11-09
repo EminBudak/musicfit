@@ -998,4 +998,4 @@ function sweep(folder) {
   }
 }
 
-module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier, listed, sameFile, cuesAt, record };
+module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier, listed, sameFile, cuesAt, record, rename };

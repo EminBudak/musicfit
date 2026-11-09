@@ -16,7 +16,7 @@ const { plan } = require("./plan");
 const { assemble, speech, BLIP, floorOf, duck, normalize, setOver, addDipped, cameOut, setWhere, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown, heldAtCeiling } = require("./report");
 const { seamsPng } = require("./draw");
-const { claim, begin, sameFile, cuesAt, record } = require("./out");
+const { claim, begin, sameFile, cuesAt, record, rename } = require("./out");
 const { blocks } = require("./breathe");
 const version = require("./version");
 
@@ -274,7 +274,7 @@ async function aac(sound, file, lufs, { limit = true } = {}) {
     if (!kept || !(m.truePeak > -1)) break;
     ceiling -= m.truePeak + 1 + 0.1;
   }
-  fs.renameSync(best.at, file);
+  rename(best.at, file);
   return best.m;
 }
 

@@ -364,6 +364,36 @@ test("a file another run adds while this one writes its reports stays when this 
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).run, "B");
 });
 
+test("the AAC encoding a virus scanner holds for a moment on Windows is moved all the same, as the run's other files are", async () => {
+  // Refused twice, as Windows does while another program reads a file just
+  // written; the platform is said to be Windows only while the move is tried.
+  const film = path.join(dir, "aac-held.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const real = fs.renameSync;
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  let refused = 0;
+  try {
+    fs.renameSync = (from, to) => {
+      if (/sound\.m4a\.\d\.m4a$/.test(from)) {
+        if (refused < 2) {
+          refused++;
+          Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+          throw Object.assign(new Error("held"), { code: "EBUSY" });
+        }
+        Object.defineProperty(process, "platform", platform);
+      }
+      return real(from, to);
+    };
+    await fit(fixture("house").file, { fps: 30, duck: 10, lufs: -14, end: "auto", length: 12, hit: 8, video: film, out: outDir("aac-held") });
+  } finally {
+    fs.renameSync = real;
+    Object.defineProperty(process, "platform", platform);
+  }
+  assert.equal(refused, 2);
+  assert.ok(fs.existsSync(path.join(outDir("aac-held"), "video.mp4")));
+});
+
 test("the lock a run killed while it moved its files left is taken over", async () => {
   const folder = goodFit("stale-lock");
   fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${deadPid()}\n`);
