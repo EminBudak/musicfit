@@ -13,8 +13,12 @@ const { CHUNK, breathe } = require("./breathe");
 
 const RATE = 48000;
 
+// A path with folders in it is read from where musicfit was started, also
+// for a call that runs ffmpeg in another folder.
 function ffmpegPath() {
-  return process.env.FFMPEG_PATH || "ffmpeg";
+  const named = process.env.FFMPEG_PATH;
+  if (!named) return "ffmpeg";
+  return path.basename(named) === named ? named : path.resolve(named);
 }
 
 // A file as ffmpeg is given it: by its full path, since ffmpeg takes a name
@@ -100,12 +104,12 @@ function stopChildren() {
 }
 
 // Runs ffmpeg with `args`, and `input` on its stdin. `writes` is the file
-// the call writes, if any.
-function run(args, input, { writes = null } = {}) {
+// the call writes, if any, and `cwd` the folder to run it in, if not this one.
+function run(args, input, { writes = null, cwd } = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(ffmpegPath(), ["-hide_banner", ...(input ? [] : ["-nostdin"]), ...args], { stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
+      child = spawn(ffmpegPath(), ["-hide_banner", ...(input ? [] : ["-nostdin"]), ...args], { cwd, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
     } catch (err) {
       reject(err);
       return;
@@ -117,7 +121,7 @@ function run(args, input, { writes = null } = {}) {
     child.stderr.on("data", (chunk) => err.push(chunk));
     child.on("error", (error) => {
       running.delete(child);
-      if (error.code === "ENOENT") reject(new Error("musicfit needs ffmpeg. Install it (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg) or set FFMPEG_PATH to it."));
+      if (error.code === "ENOENT" && !cwd) reject(new Error("musicfit needs ffmpeg. Install it (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg) or set FFMPEG_PATH to it."));
       else reject(error);
     });
     child.on("close", (code, signal) => {
@@ -239,9 +243,11 @@ async function measure(samples, { rate = RATE, channels = 2 } = {}) {
   return summary(stderr);
 }
 
-// The same for the first sound of a file, as a player decodes it.
+// The same for the first sound of a file the run made, as a player decodes
+// it. Named from its own folder: the hosted service's ffmpeg refuses an input
+// with a % in its path, and the name of the out folder is the user's.
 async function measureFile(file) {
-  const { stderr } = await run(["-v", "info", "-nostats", "-i", where(file), "-map", "0:a:0", "-af", METER, "-f", "null", "-"]);
+  const { stderr } = await run(["-v", "info", "-nostats", "-i", path.basename(file), "-map", "0:a:0", "-af", METER, "-f", "null", "-"], null, { cwd: path.dirname(file) });
   return summary(stderr);
 }
 

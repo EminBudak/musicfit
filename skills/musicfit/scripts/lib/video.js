@@ -242,18 +242,21 @@ async function encodeAac(samples, file) {
 // the video's own comment tag, so a mark another tool left there
 // (voiceoverfit marks its files so) is not carried over to a file it did
 // not make. HEVC is tagged hvc1, the tag QuickTime, Safari and iOS play.
+// The run's own files are read by their names, from their own folder, as
+// the name of the out folder is the user's (see measureFile() in audio.js).
 async function mux(file, sound, out, { picture, comment, start }) {
   const tag = picture === "hevc" ? ["-tag:v", "hvc1"] : [];
-  await run(["-v", "error", "-copyts", "-itsoffset", (-start).toFixed(6), "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)], null, { writes: where(out) });
+  await run(["-v", "error", "-copyts", "-itsoffset", (-start).toFixed(6), "-i", where(file), "-i", path.basename(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)], null, { writes: where(out), cwd: path.dirname(sound) });
   // Read back, every packet of it, before the run may put it in place: an
   // MP4 whose index did not get written is no video, whatever ffmpeg said.
   let why = null;
+  const name = path.basename(out);
   try {
-    const { stderr } = await run(["-v", "error", "-i", where(out), "-map", "0", "-c", "copy", "-f", "null", "-"]);
+    const { stderr } = await run(["-v", "error", "-i", name, "-map", "0", "-c", "copy", "-f", "null", "-"], null, { cwd: path.dirname(out) });
     if (DAMAGED.some((line) => line.test(stderr))) why = "it is cut short";
   } catch (err) {
     if (err.stopped) throw err;
-    why = err.message.replace(/^ffmpeg: /, "").split(`${where(out)}: `).join("");
+    why = err.message.replace(/^ffmpeg: /, "").split(`${name}: `).join("");
   }
   if (why) throw new Error(`The video.mp4 this run wrote cannot be read back (${why}), so it was not put in place`);
 }

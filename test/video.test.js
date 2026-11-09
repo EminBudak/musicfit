@@ -1158,6 +1158,18 @@ test("a video with more than one sound stream: sound in a later one under a sile
   assert.match(quiet.stdout, /Note {4}all-silent\.mp4 has 2 sound streams and only the first is read/);
 });
 
+test("the run's own files are read by their names from their own folder, so an out folder with a % in its name, which the hosted ffmpeg refuses as an input, ends well; a relative FFMPEG_PATH still finds that ffmpeg", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, async () => {
+  const { file } = fixture("house");
+  const repo = path.resolve(__dirname, "..");
+  // There already, so the run's hidden folder is inside it.
+  const out = at("yüzde 100% fit");
+  fs.mkdirSync(out);
+  const run = spawnSync(process.execPath, [CLI, file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", out], { cwd: repo, encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join("test", "fixtures", "nopercent", "ffmpeg") } });
+  assert.equal(run.status, 0, run.stderr);
+  const heard = await measureFile(path.join(out, "video.mp4"));
+  assert.ok(Number.isFinite(heard.integrated), "video.mp4 has no sound");
+});
+
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
   const { fitMarkdown, underVideo } = require("../skills/musicfit/scripts/lib/report");
   const base = {

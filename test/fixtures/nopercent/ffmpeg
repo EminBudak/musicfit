@@ -1,0 +1,17 @@
+#!/bin/sh
+# Refuses an input named with %, as the hosted service's ffmpeg does, and runs
+# the ffmpeg on PATH for anything else.
+input=
+for arg do
+  if [ -n "$input" ]; then
+    input=
+    case $arg in
+      *%*)
+        echo "kits ffmpeg: $arg: an input named with % or ending in .y is not opened" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  if [ "$arg" = -i ]; then input=1; fi
+done
+exec ffmpeg "$@"
