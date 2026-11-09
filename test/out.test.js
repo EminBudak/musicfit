@@ -113,13 +113,18 @@ const quote = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // What a full disk says where an earlier run's files are.
 const ROOM = "The earlier files there stay until the new ones are in place, so the run needs room for both: free some space, or give another --out";
 
-test("a run stopped with SIGTERM or SIGINT while it writes leaves the earlier files as they were, and ends by that signal", posix, async () => {
+test("a run stopped with a signal while it writes leaves the earlier files as they were, and ends by that signal", posix, async () => {
   const out = goodFit("stopped");
   const before = snapshot(out);
   const { file } = fixture("house");
-  for (const signal of ["SIGTERM", "SIGINT"]) {
+  // Ctrl-C, a cancel, a hang-up, Ctrl-\, and the signals a supervisor, a
+  // timer and a limit on processor time send. The last two would write a
+  // core file raised again: the run ends with their exit code.
+  const signals = require("node:os").constants.signals;
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR2", "SIGALRM", "SIGXCPU"]) {
     const run = await stopWhileWriting([file, "--length", "14", "--voice", fixture("voice").file, "--out", out], signal);
-    assert.equal(run.signal, signal, `${signal}: ${run.code} ${run.stderr}`);
+    if (["SIGQUIT", "SIGXCPU"].includes(signal)) assert.equal(run.code, 128 + signals[signal], `${signal}: ${run.code} ${run.signal} ${run.stderr}`);
+    else assert.equal(run.signal, signal, `${signal}: ${run.code} ${run.stderr}`);
     assert.match(run.stderr, new RegExp(`\nmusicfit: stopped, so ${quote(out)} is as it was\n$`));
     assert.deepEqual(snapshot(out), before, signal);
     // The ffmpeg it had started was stopped with it, though only the run got the signal.

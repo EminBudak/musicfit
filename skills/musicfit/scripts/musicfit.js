@@ -202,8 +202,14 @@ function summary({ dir, cues: c }) {
 // it is stopped before it began, while it reads the video's frame rate. A
 // second signal, like the copy makersmcp's supervisor passes on a moment
 // after the one its process group got, finds the listener still there and
-// changes nothing.
-const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(process.platform === "win32" ? ["SIGBREAK"] : [])];
+// changes nothing. The signals are those that end a process and can be
+// caught: Ctrl-C, Ctrl-\, a hang-up, and those a supervisor, a timer or a
+// limit on processor time sends; Ctrl-Break on Windows. A signal no process
+// can catch, as kill -9 sends, leaves the hidden folder (see out.js).
+const SIGNALS = process.platform === "win32" ? ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] : ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGUSR2", "SIGALRM", "SIGXCPU"];
+// Raised again, these would write the whole process to a core file: the run
+// ends with their exit code instead.
+const CORE = new Set(["SIGQUIT", "SIGXCPU"]);
 let stopping = false;
 // The out folder of a run that has not begun yet.
 let pending = null;
@@ -230,6 +236,7 @@ function stopOnSignals(json) {
       }
       for (const name of SIGNALS) process.removeAllListeners(name);
       const code = 128 + os.constants.signals[signal];
+      if (CORE.has(signal)) process.exit(code);
       try {
         process.kill(process.pid, signal);
       } catch {
