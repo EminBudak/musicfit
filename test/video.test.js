@@ -546,10 +546,21 @@ test("seams.png titles a track named outside a to z by its letters without their
   };
   assert.equal(title("Şarkı.wav"), title("SARKI.WAV"));
   assert.equal(title("трек 音楽.wav"), title("THE TRACK"));
+  // The punctuation of a downloaded song's name, in its plain form.
+  assert.equal(title("Don’t Stop – Live.wav"), title("DON'T STOP - LIVE.WAV"));
   const { drawable } = require("../skills/musicfit/scripts/lib/draw");
   assert.equal(drawable("café_noir & co!.mp3"), "CAFE_NOIR & CO!.MP3");
   assert.equal(drawable("Smørrebrød straße.wav"), "SMORREBROD STRASSE.WAV");
   assert.equal(drawable("गाना.wav"), null);
+  assert.equal(drawable("Artist — Title.mp3"), "ARTIST - TITLE.MP3");
+  assert.equal(drawable("“Quoted” ‘and’ wait….wav"), "\"QUOTED\" 'AND' WAIT....WAV");
+  assert.equal(drawable("über·song×2.wav"), "UBER.SONGX2.WAV");
+  // A sign it has no shape for is left out; a name of nothing else, or with
+  // letters of another script, is the track.
+  assert.equal(drawable("Song ♪ Live ✨.mp3"), "SONG LIVE.MP3");
+  assert.equal(drawable("♪♪.mp3"), null);
+  assert.equal(drawable("Песня Song.mp3"), null);
+  assert.equal(drawable("___.wav"), "___.WAV");
 });
 
 test("a faint room tone the video has stays faint against the music, never raised to --lufs", async () => {

@@ -157,17 +157,34 @@ for (const line of GLYPHS.trim().split("\n")) {
   FONT[ch] = rows;
 }
 
-// Latin letters the font draws as others, which no mark comes off of.
-const FOLD = { "Ø": "O", "Æ": "AE", "Œ": "OE", "Ł": "L", "Đ": "D", "Ð": "D", "Þ": "TH", "Ħ": "H", "Ŧ": "T", "Ŋ": "N", "Ŀ": "L", "ẞ": "SS" };
+// Latin letters the font draws as others, which no mark comes off of, and
+// the punctuation names often have, drawn in its plain form: dashes,
+// curly quotes, a times sign, a middle dot.
+const FOLD = {
+  "Ø": "O", "Æ": "AE", "Œ": "OE", "Ł": "L", "Đ": "D", "Ð": "D", "Þ": "TH", "Ħ": "H", "Ŧ": "T", "Ŋ": "N", "Ŀ": "L", "ẞ": "SS",
+  "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "―": "-", "−": "-", "‘": "'", "’": "'", "‚": ",", "′": "'", "“": '"', "”": '"', "„": '"', "″": '"',
+  "×": "X", "·": ".", "•": ".", "«": "<", "»": ">", "‹": "<", "›": ">",
+};
 
 // A name as the font draws it: in capitals, Latin letters without their
-// marks (ş as S, ø as O); null when anything in it is left that the font
-// has no letter for, as a name in Cyrillic or Chinese, which is then left
-// out rather than drawn as question marks.
+// marks (ş as S, ø as O), and the signs it has no shape for left out (an
+// emoji, a note); null when it has a letter or a digit the font has no
+// shape for, as a name in Cyrillic or Chinese, or nothing but signs before
+// its extension once those are left out. Such a name is drawn as the
+// track rather than as question marks.
 function drawable(text) {
   const plain = String(text).toUpperCase().normalize("NFKD").replace(/\p{M}/gu, "");
-  const folded = Array.from(plain, (ch) => FOLD[ch] || ch).join("");
-  return Array.from(folded).every((ch) => FONT[ch]) ? folded : null;
+  const folded = Array.from(plain, (ch) => FOLD[ch] || ch);
+  if (folded.some((ch) => !FONT[ch] && /[\p{L}\p{N}]/u.test(ch))) return null;
+  const all = folded.join("");
+  const kept = folded
+    .filter((ch) => FONT[ch])
+    .join("")
+    .replace(/ {2,}/g, " ")
+    .replace(/ (\.[A-Z0-9]+)$/, "$1")
+    .trim();
+  if (kept !== all && !/[A-Z0-9]/.test(kept.replace(/\.[A-Z0-9]+$/, ""))) return null;
+  return kept;
 }
 
 // ─── PNG ───────────────────────────────────────────────────────────────────
