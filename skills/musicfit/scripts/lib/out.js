@@ -384,7 +384,11 @@ function remove(at) {
   } catch {
     // Told by what is left.
   }
-  return !lstat(at);
+  try {
+    return !lstat(at);
+  } catch {
+    return false;
+  }
 }
 
 // A path in the out folder or next to it, written from the out folder as
@@ -636,7 +640,8 @@ async function commit(state) {
   } catch (err) {
     throw settled(state, err);
   }
-  // The earlier files, and the hidden folder with them.
+  // The earlier files, and the hidden folder with them. The run has ended
+  // well by now, and nothing from here on may say otherwise.
   remove(state.work);
   sweep(state.target);
   sweep(path.dirname(state.target));
@@ -940,7 +945,8 @@ const cutShort = (work) => isFolder(path.join(work, ".old")) && Boolean(lstat(pa
 // back: the run that ends well here has made the folder what it should be.
 // One whose earlier files a message sent the user to keeps them, and so does
 // one cut short while it moved its files in, which this run may not be the
-// one to put back.
+// one to put back. A folder this user may not look into stays too: a run
+// that has ended well does not fail over another run's leftovers.
 function sweep(folder) {
   let entries = [];
   try {
@@ -952,8 +958,12 @@ function sweep(folder) {
     const m = PART.exec(entry.name);
     if (!m || !entry.isDirectory()) continue;
     const at = path.join(folder, entry.name);
-    if (running(Number(m[1])) || Date.now() - touched(at) < STALE || lstat(path.join(at, KEPT)) || cutShort(at)) continue;
-    remove(at);
+    try {
+      if (running(Number(m[1])) || Date.now() - touched(at) < STALE || lstat(path.join(at, KEPT)) || cutShort(at)) continue;
+      remove(at);
+    } catch {
+      // Left where it is.
+    }
   }
 }
 

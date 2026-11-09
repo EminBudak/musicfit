@@ -1451,3 +1451,31 @@ test("a run killed in the moment it moved its files in is undone by the next run
   assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).musicfit, require("../package.json").version);
 });
+
+const notRoot = { skip: process.platform === "win32" ? "folder modes are POSIX" : process.getuid && process.getuid() === 0 ? "root may enter any folder" : false };
+
+test("a run that has put its files in place ends well, though a dead run's hidden folder in that place may not be looked into", notRoot, () => {
+  const { file } = fixture("house");
+  for (const where of ["in the out folder", "beside it"]) {
+    const parent = path.join(dir, `unreadable ${where}`);
+    fs.mkdirSync(parent);
+    const folder = path.join(parent, "fit");
+    const first = cli([file, "--length", "12", "--out", folder]);
+    assert.equal(first.status, 0, first.stderr);
+    const earlier = fs.readFileSync(path.join(folder, "cues.json"), "utf8");
+    const hidden = path.join(where === "beside it" ? parent : folder, `.musicfit-part-${deadPid()}-deadbeef`);
+    fs.mkdirSync(hidden);
+    age(hidden, 20);
+    fs.chmodSync(hidden, 0o000);
+    let run;
+    try {
+      run = cli([file, "--length", "12", "--hit", "8", "--out", folder]);
+    } finally {
+      fs.chmodSync(hidden, 0o755);
+    }
+    assert.equal(run.status, 0, `${where}: ${run.stderr}`);
+    assert.match(run.stdout, /^Fitted /, where);
+    assert.notEqual(fs.readFileSync(path.join(folder, "cues.json"), "utf8"), earlier, where);
+    assert.ok(fs.existsSync(hidden), `${where}: the folder it may not look into went`);
+  }
+});
