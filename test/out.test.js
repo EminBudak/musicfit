@@ -1399,6 +1399,8 @@ test("a commit that waits on a lock a run killed as it moved its files in has le
   const run = out.begin(folder);
   for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
   await out.record(run, { musicfit: "test", file: "fitted.wav", mix: null, video: null, run: "new" });
+  // As make() does: its note of what it removes, then its reports.
+  assert.deepEqual(run.removes(["fitted.wav", "cues.json", "seams.png", "FIT.md"]), ["mix.wav"]);
   // The lock goes stale only now, while this run waits for its turn.
   const work = await cutShort(folder);
   await run.commit();
@@ -1478,4 +1480,20 @@ test("a run that has put its files in place ends well, though a dead run's hidde
     assert.notEqual(fs.readFileSync(path.join(folder, "cues.json"), "utf8"), earlier, where);
     assert.ok(fs.existsSync(hidden), `${where}: the folder it may not look into went`);
   }
+});
+
+test("the earlier files a run says it removes are read after the takeover of a run killed in that folder's commit, so what the takeover brings back goes too", async () => {
+  const folder = goodFit("removes-after-kill");
+  const writes = ["fitted.wav", "cues.json", "seams.png", "FIT.md"];
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  // Killed as it moved its files in, after this run's claim() and before the note.
+  await cutShort(folder);
+  // As make() does, once the work is done.
+  assert.deepEqual(run.removes(writes), ["mix.wav"]);
+  await out.record(run, { musicfit: "test", file: "fitted.wav", mix: null, video: null, run: "new" });
+  await run.commit();
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+  assert.deepEqual(out.listed(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).run, "new");
 });

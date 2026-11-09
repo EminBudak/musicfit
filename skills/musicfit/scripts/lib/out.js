@@ -331,9 +331,7 @@ const and = (names) => (names.length === 1 ? names[0] : `${names.slice(0, -1).jo
 function claim(dir, writes, inputs = []) {
   writable(dir);
   if (!fs.existsSync(dir)) return;
-  // A run killed while it put its files there is undone first.
-  const stale = staleLock(path.join(dir, LOCK));
-  if (stale !== null) takeOver(path.resolve(dir), stale);
+  undoKilled(path.resolve(dir));
   for (const name of writes) {
     const s = lstat(path.join(dir, name));
     if (s && s.isDirectory()) throw new Error(`${path.join(dir, name)} is a folder, and this run writes its ${name} there: move it, or give another --out`);
@@ -433,7 +431,9 @@ let hooked = false;
 // both are in is made by the first of them. removes(writes) names the
 // earlier run's files in `dir` that a run writing `writes` does not make
 // again, for its reports to say, and those are the ones it removes: commit()
-// puts the outputs in place and removes them, abort() leaves no trace.
+// puts the outputs in place and removes them, abort() leaves no trace. A run
+// killed in that folder's commit since this run's claim() is undone first, so
+// removes() never reads a folder left half moved.
 function begin(dir) {
   const state = {
     dir,
@@ -444,7 +444,10 @@ function begin(dir) {
     removing: null,
     file: (name) => path.join(open(state), name),
     scratch: (name) => path.join(open(state), ".tmp", name),
-    removes: (writes) => (state.removing = earlier(state.target).filter((name) => !writes.includes(name))),
+    removes: (writes) => {
+      undoKilled(state.target);
+      return (state.removing = earlier(state.target).filter((name) => !writes.includes(name)));
+    },
     commit: () => commit(state),
     abort: () => abort(state),
     explain: (err) => explain(state, err),
@@ -552,6 +555,12 @@ function staleLock(at) {
   const gone = named && host === os.hostname() && !running(Number(pid));
   const age = Date.now() - s.mtimeMs;
   return gone || age > LOCK_STALE || (!named && age > LOCK_BARE) ? text : null;
+}
+
+// Undoes what a run killed while it put its files in `target` left there.
+function undoKilled(target) {
+  const stale = staleLock(path.join(target, LOCK));
+  if (stale !== null) takeOver(target, stale);
 }
 
 // A lock a killed run left is taken away, only while it is still the one
