@@ -75,7 +75,8 @@ const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
 // after it, one of the closing lines reason() in audio.js leaves out, so
 // the run could not tell the track from the voice or the video.
 function files(track, options) {
-  const inputs = [track, options.voice, options.video].filter(Boolean);
+  if (typeof track !== "string" || !track) throw new Error("Give one track, for example: musicfit track.mp3 --length 30");
+  const inputs = [track, options.voice, options.video].filter((name) => name !== undefined && name !== null);
   for (const name of inputs) {
     if (ADDRESS.test(name) && !fs.existsSync(name)) throw new Error(`Cannot read ${name}: musicfit reads files, not addresses, so download it first`);
   }

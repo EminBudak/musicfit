@@ -100,7 +100,8 @@ function parse(argv) {
     else rest.push(arg);
   }
   if (flags.help || flags.version) return { ...flags };
-  if (rest.length !== 1) throw new Error("Give one track, for example: musicfit track.mp3 --length 30");
+  // An empty name, as a script gives for a variable never set, is no track.
+  if (rest.length !== 1 || !rest[0]) throw new Error("Give one track, for example: musicfit track.mp3 --length 30");
   const fps = raw.fps !== undefined ? parseFps(raw.fps) : 30;
   // With --video and no --fps, frames count at the video's frame rate: a
   // time given in frames waits in `frames` until main() has read it.

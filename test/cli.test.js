@@ -37,6 +37,11 @@ test("the CLI explains itself and refuses a missing track, a missing length or a
   const none = spawnSync(process.execPath, [CLI], { encoding: "utf8" });
   assert.equal(none.status, 2);
   assert.match(none.stderr, /Give one track/);
+  // A name with nothing in it, as a script gives for a variable never set.
+  const empty = spawnSync(process.execPath, [CLI, "", "--length", "10"], { encoding: "utf8" });
+  assert.equal(empty.status, 2);
+  assert.match(empty.stderr, /^musicfit: Give one track/);
+  assert.doesNotMatch(empty.stderr, /Reading/);
   const noLength = spawnSync(process.execPath, [CLI, "song.mp3"], { encoding: "utf8" });
   assert.equal(noLength.status, 2);
   assert.match(noLength.stderr, /Give --length/);
