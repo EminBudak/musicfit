@@ -109,14 +109,16 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
     voice: voice ? { file: voice.file, duck: voice.duck, spans: voice.spans.map(([f, t]) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t) })) } : null,
     // With --video: video.mp4, the video's picture with this sound under
     // it. sound is what became of the video's own sound: keep (each place
-    // it plays set `over` dB louder than the music there, the music not
-    // dipping; see setOver in render.js for the limits), voice (set to the
-    // target where it plays, the music dipping `duck` dB under its speech),
-    // drop (left out) or none (it had none). With keep or voice and no
-    // spans it was only turned down to the target, when it was louder. same
-    // says when the video was the track or the voice, which play in its
-    // place; spans are where it plays, each with keep saying how far over
-    // the music it came out (null where no music plays, and with voice).
+    // it plays set `over` dB louder than the music there, the music dipping
+    // under a place only where its peaks leave no room for that; see setOver
+    // in render.js for the limits), voice (set to the target where it
+    // plays, the music dipping `duck` dB under its speech), drop (left out)
+    // or none (it had none). With keep or voice and no spans it was only
+    // turned down to the target, when it was louder. same says when the
+    // video was the track or the voice, which play in its place; spans are
+    // where it plays, each with keep saying how far over the music it came
+    // out (null where no music plays) and how far the music dips under it
+    // in video.mp4 (`dip`), both null with voice.
     video: video
       ? {
           file: "video.mp4",
@@ -130,7 +132,7 @@ function cues({ version, track, analysis: a, plan: p, result: r, options, loudne
           same: video.same,
           duck: video.sound === "voice" ? video.duck : null,
           over: video.over === undefined ? null : video.over,
-          spans: video.spans.map(([f, t], i) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t), over: video.places ? round1(video.places[i].over) : null })),
+          spans: video.spans.map(([f, t], i) => ({ from: r3(f), to: r3(t), fromFrame: frame(f), toFrame: frame(t), over: video.places ? round1(video.places[i].over) : null, dip: video.places ? round1(video.places[i].dip) : null })),
           loudness: { target: options.lufs, integrated: round1(video.loudness.integrated), truePeak: round1(video.loudness.truePeak) },
         }
       : null,
@@ -322,21 +324,33 @@ function underVideo(c) {
   const all = c.voice ? "the music, the voice and its own sound" : "the music and its own sound";
   const set = `set to ${v.loudness.target} LUFS where it plays`;
   if (v.sound === "keep" && !v.spans.length) return all;
-  // keep: that sound over the music, which does not dip under it, in every
-  // place it plays or in those where the music let it (a note names the
-  // others), each within half a dB of KEEP_OVER or further over.
+  // keep: that sound over the music in every place it plays or in those
+  // where it came out so (a note names the others), each within half a dB
+  // of KEEP_OVER or further over, and where the music dips under them.
   const heard = v.spans.filter((s) => s.over !== null && s.over !== undefined);
   const clear = v.spans.length - heard.filter((s) => s.over < v.over - 0.5).length;
   let over = `${set}, as no music plays there`;
   if (heard.length && clear === v.spans.length) over = `about ${v.over} dB or more louder than the music where it plays (${places(v.spans.length)})`;
   else if (heard.length && clear) over = `about ${v.over} dB or more louder than the music in ${clear} of the ${v.spans.length} places it plays`;
   else if (heard.length) over = `less than ${v.over} dB louder than the music where it plays (${places(v.spans.length)})`;
+  over += dipsUnder(v);
   if (v.sound === "keep" && c.voice) return `${all}, the music dipping ${c.voice.duck} dB under the voice and its own sound ${over}`;
   if (v.sound === "keep") return `${all}, that sound ${over}`;
   if (v.sound === "voice" && !v.spans.length) return `${all}, which had no speech for the music to dip under`;
   if (v.sound === "voice") return `its own sound ${set}${voice}, the music dipping ${v.duck} dB under ${c.voice ? "both" : "it"}`;
   if (v.sound === "drop") return `the music${voice} in place of its own sound`;
   return `the music${voice} (it had no sound of its own)`;
+}
+
+// How far the music dips under the places of keep, said after them: "the
+// music dipping 1.1 to 7.7 dB under 3 of them".
+function dipsUnder(v) {
+  const dipped = v.spans.filter((s) => s.dip >= 0.05);
+  if (!dipped.length) return "";
+  const dbs = dipped.map((s) => s.dip);
+  const [lo, hi] = [Math.min(...dbs), Math.max(...dbs)];
+  const which = v.spans.length === 1 ? "it" : dipped.length === 1 ? "one of them" : dipped.length < v.spans.length ? `${dipped.length} of them` : dipped.length === 2 ? "both" : `all ${dipped.length}`;
+  return `, the music dipping ${lo === hi ? hi : `${lo} to ${hi}`} dB under ${which}`;
 }
 
 function startText(c) {

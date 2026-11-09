@@ -141,3 +141,24 @@ test("a hit in the last half second is refused, since it would not be heard", ()
   assert.match(run.stderr, /at least half a second after it/);
 });
 
+
+test("keep: a faint room tone the gain takes along, or a music peak at the ceiling far from a place, holds back no gain of it", async () => {
+  const { setOver } = require("../skills/musicfit/scripts/lib/render");
+  const RATE = 48000;
+  const n = 6 * RATE;
+  const rnd = random(13);
+  // A soft tone for the music, with one click at -0.9 dBFS at 4 s, over
+  // the ceiling the whole is held to and far from the place.
+  const music = { L: new Float32Array(n), R: new Float32Array(n) };
+  for (let i = 0; i < n; i++) music.L[i] = music.R[i] = 0.05 * Math.sin((2 * Math.PI * 220 * i) / RATE);
+  for (let i = 0; i < 48; i++) music.L[4 * RATE + i] = music.R[4 * RATE + i] = 0.9 * Math.sin((Math.PI * i) / 48);
+  // The video's own sound: a room tone 60 dB down all the way, and a quiet
+  // burst from 1 s to 1.3 s.
+  const own = { L: new Float32Array(n), R: new Float32Array(n) };
+  for (let i = 0; i < n; i++) own.L[i] = own.R[i] = (rnd() * 2 - 1) * 0.001;
+  for (let i = RATE; i < 1.3 * RATE; i++) own.L[i] = own.R[i] = (rnd() * 2 - 1) * 0.05;
+  const [place] = await setOver(own, music, [[1, 1.3]], { lufs: -14, over: 3, most: 6, duck: 10 });
+  // Raised to the target, far over the soft tone, without a dip: not held
+  // down by the click 3 s away, nor silenced for it.
+  assert.ok(place.gain > 5 && place.over > 3 && place.dip === 0, JSON.stringify({ gain: place.gain, over: place.over, dip: place.dip }));
+});

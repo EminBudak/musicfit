@@ -612,90 +612,231 @@ async function loudnessOf({ L, R }, a, b) {
   return lufs > -70 ? lufs : -Infinity;
 }
 
-// The peak no place of a video's own sound is raised past where music
-// plays under it, in dBFS: 6 dB over the -1 dBTP the whole is held to, so
-// the limiter that holds the whole takes little off the music around a
-// sharp sound, while a sound effect with the peaks of most, like a whoosh
-// or a logo sound on a drop, still reaches its level over the music.
-const PEAK = 5;
+// How far up and down each channel of a sound reaches in each millisecond:
+// its highest and its lowest value, the points between its samples a 4x
+// oversampled meter sees included, as for truePeaks(). Two sounds added
+// with gains a and g reach no further in a millisecond than a times the one
+// and g times the other added, so their peaks can be bounded without
+// adding them.
+const SPAN = RATE / 1000;
+async function reach({ L, R }) {
+  const n = L.length;
+  const count = Math.ceil(n / SPAN);
+  const out = { up: [], down: [] };
+  for (const x of [L, R]) {
+    const up = new Float32Array(count);
+    const down = new Float32Array(count);
+    await blocks(0, n, (from, to) => {
+      for (let i = from; i < to; i++) {
+        const b = (i / SPAN) | 0;
+        let hi = x[i];
+        let lo = x[i];
+        const inside = i >= TAPS - 1 && i + TAPS < n;
+        for (const k of PHASES) {
+          let v = 0;
+          if (inside) for (let j = 0; j < 2 * TAPS; j++) v += k[j] * x[i - (TAPS - 1) + j];
+          else {
+            for (let j = 0; j < 2 * TAPS; j++) {
+              const at = i - (TAPS - 1) + j;
+              if (at >= 0 && at < n) v += k[j] * x[at];
+            }
+          }
+          if (v > hi) hi = v;
+          if (v < lo) lo = v;
+        }
+        if (hi > up[b]) up[b] = hi;
+        if (-lo > down[b]) down[b] = -lo;
+      }
+    });
+    out.up.push(up);
+    out.down.push(down);
+  }
+  return out;
+}
+
+// How deep a dip of the music under a place is at sample i, from 0 to 1, as
+// duck() shapes it: down over ATTACK before the place, all the way while it
+// plays, and back over RELEASE after it.
+function dipAt(i, a, b) {
+  const attack = Math.round(ATTACK * RATE);
+  const release = Math.round(RELEASE * RATE);
+  if (i < a - attack || i >= b + release) return 0;
+  if (i < a) return sCurve((i - (a - attack)) / attack);
+  if (i < b) return 1;
+  return 1 - sCurve((i - b) / release);
+}
 
 // --video-sound keep: each place where the video's own sound plays
-// ([from, to] in seconds) is set `over` dB louder than the music there, both
-// read over that place, so a sound effect stands out without the music
-// dipping under it. That level is kept between the target and `most` dB
-// over it, so a place where no music plays is at the target, and one over
-// the loudest music is not raised so far that the limiter holding the whole
-// has to pull it and the music down again. Where music plays, a place is
-// not raised past the gain that brings its own peak to PEAK either, and
-// that limit comes last: a click, or short clicks far apart that read quiet
-// over their place, raised to their level would have the limiter pull the
-// music down around each. So a sharp sound can stay under the target, or
-// less than `over` dB over the music.
+// ([from, to] in seconds) is set `over` dB louder than the music there,
+// both read over that place, so a sound effect stands out. That level is
+// kept between the target and `most` dB over it, so a place where no music
+// plays is at the target, and one over the loudest music is not raised far
+// past it. A place is set no louder than keeps its true peaks, added to
+// the music's (and to `also`, a voice that plays too), under `ceiling`, so
+// the limiter that holds the whole takes nothing off the music. Where that
+// leaves a place less than `over` dB over the music, as a sharp sound or a
+// loud one on the drop can be, the music dips under that place alone by as
+// much as is missing, which also leaves the place's peaks more room, and
+// never by more than `duck` dB. A place can stay under the target, or less
+// than `over` dB over the music, when even that is not enough.
 // The gain holds over each place and for up to 0.5 s after it, so its tail
 // keeps the same level, then turns to the next place's along an S-curve
-// that ends 10 ms before it. Returns each place with the gain it got and
-// how far over the music it was set (null where no music plays), and with
-// its samples as they are now, for cameOut().
-async function setOver(own, music, spans, { lufs, over, most }) {
-  const places = [];
-  for (const [from, to] of spans) {
-    const a = Math.round(from * RATE);
-    const b = Math.round(to * RATE);
-    const level = await loudnessOf(own, a, b);
-    const bed = await loudnessOf(music, a, b);
-    const want = Math.min(lufs + most, Math.max(lufs, bed + over));
-    const top = { peak: 0 };
-    await blocks(Math.max(0, a), Math.min(own.L.length, b), (from, to) => {
-      let { peak } = top;
-      for (let i = from; i < to; i++) peak = Math.max(peak, Math.abs(own.L[i]), Math.abs(own.R[i]));
-      top.peak = peak;
-    });
-    let gain = Number.isFinite(level) ? want - level : 0;
-    if (Number.isFinite(bed) && top.peak > 0) gain = Math.min(gain, PEAK - 20 * Math.log10(top.peak));
-    places.push({ from, to, a, b, gain, over: Number.isFinite(bed) ? level + gain - bed : null });
-  }
+// that ends 10 ms before it. Returns each place with the gain it got, how
+// far the music dips under it (`dip`, in dB) and how far over the music it
+// was set (null where no music plays), and with its samples as they are
+// now, for cameOut().
+async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1, also = null }) {
   const { L, R } = own;
   const n = L.length;
   const hold = Math.round(RELEASE * RATE);
   const lead = Math.round(0.01 * RATE);
+  // Where each place's gain holds, and where it turns to the next one's.
+  const places = spans.map(([from, to]) => ({ from, to, a: Math.round(from * RATE), b: Math.round(to * RATE) }));
+  places.forEach((p, k) => {
+    const next = places[k + 1];
+    const end = next ? p.b : n;
+    const gap = next ? Math.max(0, next.a - end) : 0;
+    p.turn = end + Math.min(hold, Math.floor(gap / 2));
+    p.reach = Math.max(p.turn, end + gap - Math.min(lead, gap - (p.turn - end)));
+  });
+  const ownReach = await reach(own);
+  const musicReach = await reach(music);
+  const alsoReach = also ? await reach(also) : null;
+  // The ceiling, or a tenth of a dB over the music's own highest peak when
+  // that reads over it, so the music is never held to less than it is and
+  // a faint sound added to that peak is not taken for one that passes it.
+  let loudest = 0;
+  for (const side of [musicReach.up, musicReach.down]) for (const x of side) for (const v of x) if (v > loudest) loudest = v;
+  const top = Math.max(10 ** (ceiling / 20), loudest * 10 ** (0.1 / 20));
+  for (let k = 0; k < places.length; k++) {
+    const p = places[k];
+    p.level = await loudnessOf(own, p.a, p.b);
+    p.bed = await loudnessOf(music, p.a, p.b);
+    // Its gain reaches from where the one before turns to where it turns to
+    // the next one's.
+    const first = k ? places[k - 1].turn : 0;
+    const last = k < places.length - 1 ? p.reach : n;
+    const b0 = Math.floor(first / SPAN);
+    const b1 = Math.min(ownReach.up[0].length, Math.ceil(last / SPAN));
+    // The least the music dips in each millisecond of it under a dip of
+    // this place.
+    const deep = new Float32Array(b1 - b0);
+    for (let b = b0; b < b1; b++) deep[b - b0] = Math.min(dipAt(b * SPAN, p.a, p.b), dipAt(Math.min(n, (b + 1) * SPAN) - 1, p.a, p.b));
+    // The place's own highest peak. What the gain takes along that is 40 dB
+    // under it, as a room tone between the places, adds a hundredth of the
+    // ceiling at most to the peaks around it, and holds no gain back.
+    let peak = 0;
+    for (let b = Math.floor(p.a / SPAN); b < Math.min(b1, Math.ceil(p.b / SPAN)); b++) for (let c = 0; c < 2; c++) peak = Math.max(peak, ownReach.up[c][b], ownReach.down[c][b]);
+    // The highest gain its peaks allow with the music dipped `d` dB, linear.
+    const room = (d) => {
+      const floor = 10 ** (-d / 20);
+      let best = Infinity;
+      for (let b = b0; b < b1; b++) {
+        const g = 1 - (1 - floor) * deep[b - b0];
+        for (let c = 0; c < 2; c++) {
+          for (const side of ["up", "down"]) {
+            const o = ownReach[side][c][b];
+            if (!(o > 0.01 * peak)) continue;
+            const left = top - g * musicReach[side][c][b] - (alsoReach ? alsoReach[side][c][b] : 0);
+            best = Math.min(best, Math.max(0, left) / o);
+          }
+        }
+      }
+      return best;
+    };
+    const heard = Number.isFinite(p.bed);
+    const want = (d) => Math.min(lufs + most, Math.max(lufs, heard ? p.bed - d + over : lufs));
+    const gainAt = (d) => (Number.isFinite(p.level) ? Math.min(want(d) - p.level, 20 * Math.log10(room(d))) : 0);
+    const overAt = (d) => p.level + gainAt(d) - (p.bed - d);
+    // The least dip that leaves the place `over` dB over the music, found
+    // by halving: the place stands further over the music the more it dips.
+    let dip = 0;
+    if (heard && Number.isFinite(p.level) && duck > 0 && !(overAt(0) >= over - 0.05)) {
+      if (!(overAt(duck) >= over - 0.05)) dip = duck;
+      else {
+        let lo = 0;
+        let hi = duck;
+        for (let round = 0; round < 24; round++) {
+          const mid = (lo + hi) / 2;
+          if (overAt(mid) >= over - 0.05) hi = mid;
+          else lo = mid;
+        }
+        dip = hi;
+      }
+    }
+    p.dip = dip;
+    p.gain = gainAt(dip);
+    p.over = heard && Number.isFinite(p.level) ? overAt(dip) : null;
+    if (!Number.isFinite(p.gain)) p.gain = -120;
+  }
   let at = 0;
   for (let k = 0; k < places.length; k++) {
+    const { turn, reach: to } = places[k];
     const next = places[k + 1];
-    const end = next ? Math.round(places[k].to * RATE) : n;
-    const gap = next ? Math.max(0, Math.round(next.from * RATE) - end) : 0;
-    const turn = end + Math.min(hold, Math.floor(gap / 2));
-    const reach = Math.max(turn, end + gap - Math.min(lead, gap - (turn - end)));
     const g = 10 ** (places[k].gain / 20);
     if (g !== 1) {
-      await blocks(Math.min(at, n), Math.min(turn, n), (from, to) => {
-        for (let i = from; i < to; i++) {
+      await blocks(Math.min(at, n), Math.min(turn, n), (from, end) => {
+        for (let i = from; i < end; i++) {
           L[i] *= g;
           R[i] *= g;
         }
       });
     }
-    if (next && reach > turn) {
+    if (next && to > turn) {
       const [g0, g1] = [places[k].gain, next.gain];
-      await blocks(turn, Math.min(reach, n), (from, to) => {
-        for (let i = from; i < to; i++) {
-          const gi = 10 ** ((g0 + (g1 - g0) * sCurve((i - turn) / (reach - turn))) / 20);
+      await blocks(turn, Math.min(to, n), (from, end) => {
+        for (let i = from; i < end; i++) {
+          const gi = 10 ** ((g0 + (g1 - g0) * sCurve((i - turn) / (to - turn))) / 20);
           L[i] *= gi;
           R[i] *= gi;
         }
       });
     }
-    at = reach;
+    at = to;
   }
-  for (const p of places) p.own = { L: L.slice(p.a, p.b), R: R.slice(p.a, p.b) };
+  for (const p of places) {
+    p.own = { L: L.slice(p.a, p.b), R: R.slice(p.a, p.b) };
+    for (const key of ["turn", "reach", "level", "bed"]) delete p[key];
+  }
   return places;
 }
 
+// Adds the music into `into`, dipped under each place of setOver() by its
+// `dip`, shaped as duck() shapes a dip; where dips meet, the deepest holds.
+async function addDipped(into, music, places) {
+  const n = Math.min(into.L.length, music.L.length);
+  await blocks(0, n, (from, to) => {
+    for (let i = from; i < to; i++) {
+      into.L[i] += music.L[i];
+      into.R[i] += music.R[i];
+    }
+  });
+  const attack = Math.round(ATTACK * RATE);
+  const release = Math.round(RELEASE * RATE);
+  const dipped = places.filter((p) => p.dip > 0);
+  for (const [a, b] of dips(dipped.map((p) => [p.from, p.to]), n)) {
+    // What the music is taken down by in [a, b), from every dip there.
+    const gain = new Float32Array(b - a).fill(1);
+    for (const p of dipped) {
+      const floor = 10 ** (-p.dip / 20);
+      for (let i = Math.max(a, p.a - attack); i < Math.min(b, p.b + release); i++) gain[i - a] = Math.min(gain[i - a], 1 - (1 - floor) * dipAt(i, p.a, p.b));
+    }
+    await blocks(a, b, (from, to) => {
+      for (let i = from; i < to; i++) {
+        const cut = 1 - gain[i - a];
+        into.L[i] -= cut * music.L[i];
+        into.R[i] -= cut * music.R[i];
+      }
+    });
+  }
+}
+
 // How far over the music each place of setOver() came out once the whole
-// was set to the target and its peaks held, which takes more off a loud
-// sound effect than off the music under it: the whole split over the place
-// into the music and the place's own sound by least squares, as a meter
-// can split them, and the place's `over` moved by the difference in their
-// gains. Each place's samples are let go.
+// was set to the target, and its peaks held if they had to be: the whole
+// split over the place into the music and the place's own sound by least
+// squares, as a meter can split them, and the place's `over` moved by the
+// difference in their gains, past the music's dip there, which `over`
+// counts already. Each place's samples are let go.
 async function cameOut(places, whole, music) {
   for (const p of places) {
     const { own } = p;
@@ -723,7 +864,7 @@ async function cameOut(places, whole, music) {
     if (!(det > 0.0001 * mm * oo)) continue;
     const gm = (hm * oo - ho * mo) / det;
     const go = (ho * mm - hm * mo) / det;
-    if (gm > 0 && go > 0) p.over += 20 * Math.log10(go / gm);
+    if (gm > 0 && go > 0) p.over += 20 * Math.log10(go / gm) - p.dip;
   }
 }
 
@@ -752,4 +893,4 @@ async function setWhere(audio, spans, lufs) {
   return gain;
 }
 
-module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, loudnessOf, setOver, cameOut, setWhere, scale, attackNear };
+module.exports = { assemble, speech, BLIP, floorOf, duck, normalize, loudnessOf, setOver, addDipped, cameOut, setWhere, scale, attackNear };
