@@ -126,34 +126,109 @@ function listed(dir, c = cuesIn(dir)) {
 }
 
 // The earlier run's files in `dir`: those its cues.json lists that are
-// still as that run wrote them. cues.json gives the size in bytes of each
-// of the others under `sizes`, and video.mp4 has to carry musicfit's mark
-// too, so a cues.json copied next to someone else's files, or a file
-// changed since, never makes them musicfit's. FIT.md may have had its line
-// ends turned into CR LF, as git does on Windows. A cues.json with no
-// sizes, as musicfit 0.1 wrote it, is taken at its word for the names 0.1
-// wrote; 0.1 wrote no video.mp4. A folder or a link under one of those
-// names is not the earlier run's.
+// still as that run wrote them. cues.json gives the size in bytes and the
+// SHA-256 of each of the others (`sizes`, `sha256`), and its own SHA-256,
+// of its text without that one, so a cues.json copied next to someone
+// else's files, or a file changed since, cues.json itself included, never
+// makes them musicfit's. FIT.md may have had its line ends turned into CR
+// LF, as git does on Windows. A cues.json with no SHA-256s, as musicfit 0.1
+// wrote it, is taken at its word for the names 0.1 wrote; 0.1 wrote no
+// video.mp4. A folder or a link under one of those names is not the
+// earlier run's.
 function earlier(dir) {
   const c = cuesIn(dir);
   const names = listed(dir, c);
-  const sizes = c && c.sizes && typeof c.sizes === "object" ? c.sizes : null;
+  const sha = c && c.sha256 && typeof c.sha256 === "object" ? c.sha256 : null;
+  const sizes = c && c.sizes && typeof c.sizes === "object" ? c.sizes : {};
   const kept = (name) => {
     const at = path.join(dir, name);
     const s = lstat(at);
     if (!s || !s.isFile()) return false;
-    if (name === "cues.json") return true;
-    if (!sizes) return name !== VIDEO;
-    if (name === "FIT.md" && s.size > sizes[name] && s.size < 1 << 20) return s.size - crlf(at) === sizes[name];
-    return s.size === sizes[name] && (name !== VIDEO || require("./video").marked(at));
+    if (!sha) {
+      if (name === "cues.json") return true;
+      if (!c.sizes) return name !== VIDEO;
+      return s.size === sizes[name] && (name !== VIDEO || require("./video").marked(at));
+    }
+    if (name === "cues.json") return sealed(c);
+    if (typeof sha[name] !== "string") return false;
+    if (s.size === sizes[name]) return digest(at) === sha[name];
+    // FIT.md, its line ends turned into CR LF.
+    if (name !== "FIT.md") return false;
+    const text = readSmall(at, 1 << 20);
+    return text !== null && text.includes("\r\n") && hash(text.replace(/\r\n/g, "\n")) === sha[name];
   };
   return NAMES.filter((name) => names.includes(name) && kept(name));
 }
 
-// How many line ends of a text file are CR LF.
-function crlf(at) {
-  const text = readSmall(at, 1 << 20) || "";
-  return text.split("\r\n").length - 1;
+const hash = (text) => crypto.createHash("sha256").update(text).digest("hex");
+
+// cues.json as musicfit writes it.
+const cuesText = (c) => JSON.stringify(c, null, 2) + "\n";
+
+// Whether a cues.json is as musicfit wrote it: its SHA-256 is of the text
+// it had before that entry was added, which reading it and writing it again
+// gives back, whatever line ends it has now.
+function sealed(c) {
+  const own = c.sha256["cues.json"];
+  if (typeof own !== "string") return false;
+  const copy = JSON.parse(JSON.stringify(c));
+  delete copy.sha256["cues.json"];
+  return hash(cuesText(copy)) === own;
+}
+
+// A file's SHA-256, read a block at a time without following a link or
+// waiting on a pipe; null when it is not a file. A file is read once: a
+// later look finds it by what tells it from one that came in its place.
+const digests = new Map();
+function digest(at) {
+  const id = identity(at);
+  const known = digests.get(at);
+  if (id !== null && known && known.id === id) return known.hex;
+  const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
+  let fd;
+  try {
+    fd = fs.openSync(at, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (!fs.fstatSync(fd).isFile()) return null;
+    const sum = crypto.createHash("sha256");
+    const block = Buffer.allocUnsafe(1 << 20);
+    for (let n; (n = fs.readSync(fd, block, 0, block.length, null)); ) sum.update(block.subarray(0, n));
+    const hex = sum.digest("hex");
+    digests.set(at, { id, hex });
+    return hex;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// The same, read without holding the main thread, which has to stay free
+// to hear a stop: for the files a run has just written.
+async function digestOf(at) {
+  const sum = crypto.createHash("sha256");
+  const handle = await fs.promises.open(at, "r");
+  try {
+    const block = Buffer.allocUnsafe(1 << 20);
+    for (let n; (n = (await handle.read(block, 0, block.length, null)).bytesRead); ) sum.update(block.subarray(0, n));
+  } finally {
+    await handle.close();
+  }
+  return sum.digest("hex");
+}
+
+// Writes cues.json, last of the run's files: with the size in bytes and the
+// SHA-256 of each file the run wrote beside it, and its own SHA-256, so a
+// later run knows them for this run's only while they are as it wrote them
+// (see earlier()).
+async function record(run, c) {
+  c.sizes = {};
+  c.sha256 = {};
+  for (const name of [c.file, c.mix, c.video && c.video.file, "seams.png", "FIT.md"].filter(Boolean)) {
+    c.sizes[name] = fs.statSync(run.file(name)).size;
+    c.sha256[name] = await digestOf(run.file(name));
+  }
+  c.sha256["cues.json"] = hash(cuesText(c));
+  fs.writeFileSync(run.file("cues.json"), cuesText(c));
 }
 
 // Whether two paths name one file, however each is reached.
@@ -707,4 +782,4 @@ function sweep(folder) {
   }
 }
 
-module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier, listed, sameFile, cuesAt };
+module.exports = { OUTPUTS, NAMES, LOCK, writable, claim, begin, stopAll, sweep, earlier, listed, sameFile, cuesAt, record };

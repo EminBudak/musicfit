@@ -553,17 +553,66 @@ function videoFit(name) {
   return { folder, film };
 }
 
-test("cues.json gives the size of each file the run wrote beside it", () => {
+const sha256 = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+
+test("cues.json gives the size and the SHA-256 of each file the run wrote beside it, and its own SHA-256", () => {
   const { folder } = videoFit("sizes");
-  const sizes = (at) => JSON.parse(fs.readFileSync(path.join(at, "cues.json"), "utf8")).sizes;
-  assert.deepEqual(Object.keys(sizes(folder)).sort(), ["FIT.md", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
-  for (const [name, size] of Object.entries(sizes(folder))) assert.equal(size, fs.statSync(path.join(folder, name)).size, name);
+  const cues = (at) => JSON.parse(fs.readFileSync(path.join(at, "cues.json"), "utf8"));
+  // Every file but cues.json, by its size and its SHA-256; cues.json by the
+  // SHA-256 of its text as it was before that entry was added.
+  const check = (at, names) => {
+    const c = cues(at);
+    assert.deepEqual(Object.keys(c.sizes).sort(), names);
+    assert.deepEqual(Object.keys(c.sha256).sort(), [...names, "cues.json"].sort());
+    for (const name of names) {
+      assert.equal(c.sizes[name], fs.statSync(path.join(at, name)).size, name);
+      assert.equal(c.sha256[name], sha256(fs.readFileSync(path.join(at, name))), name);
+    }
+    const own = c.sha256["cues.json"];
+    delete c.sha256["cues.json"];
+    assert.equal(own, sha256(JSON.stringify(c, null, 2) + "\n"));
+  };
+  check(folder, ["FIT.md", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
   const read = outDir("sizes-analysis");
   const run = cli([fixture("house").file, "--analyze", "--out", read, "--json"]);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout).sizes, sizes(read));
-  assert.deepEqual(Object.keys(sizes(read)).sort(), ["FIT.md", "seams.png"]);
-  for (const [name, size] of Object.entries(sizes(read))) assert.equal(size, fs.statSync(path.join(read, name)).size, name);
+  // --json prints cues.json as it is written.
+  assert.equal(run.stdout, fs.readFileSync(path.join(read, "cues.json"), "utf8"));
+  check(read, ["FIT.md", "seams.png"]);
+});
+
+test("a file changed since the run wrote it is the user's, though it kept its size, and so is a cues.json changed by hand", () => {
+  const { file } = fixture("house");
+  const folder = goodFit("same-size");
+  const refused = (name) => {
+    const run = cli([file, "--length", "12", "--voice", fixture("voice").file, "--out", folder]);
+    assert.equal(run.status, 1, `${name}: ${run.stderr}`);
+    assert.match(run.stderr, new RegExp(`musicfit: ${quote(path.join(folder, name))} is not the ${quote(name)} musicfit wrote there, and this run would replace it: move it, or give another --out\n$`));
+    assert.doesNotMatch(run.stderr, /Reading/);
+  };
+  // A word of FIT.md in capitals, and fitted.wav 3 dB down: the same sizes.
+  const notes = path.join(folder, "FIT.md");
+  const written = fs.readFileSync(notes, "utf8");
+  fs.writeFileSync(notes, written.replace("Where to listen", "WHERE TO LISTEN"));
+  assert.equal(fs.statSync(notes).size, Buffer.byteLength(written));
+  refused("FIT.md");
+  fs.writeFileSync(notes, written);
+  const fitted = path.join(folder, "fitted.wav");
+  const bytes = fs.readFileSync(fitted);
+  const quieter = Buffer.from(bytes);
+  for (let at = 44 + 24; at + 3 <= quieter.length; at += 3) quieter.writeIntLE(Math.round(quieter.readIntLE(at, 3) * 0.7), at, 3);
+  fs.writeFileSync(fitted, quieter);
+  refused("fitted.wav");
+  fs.writeFileSync(fitted, bytes);
+  // A cue changed by hand.
+  const cuesFile = path.join(folder, "cues.json");
+  const text = fs.readFileSync(cuesFile, "utf8");
+  fs.writeFileSync(cuesFile, text.replace(/"bpm": (\d+)/, (_, bpm) => `"bpm": ${Number(bpm) + 1}`));
+  refused("cues.json");
+  // The same text with CR LF line ends, as git can leave it, is still musicfit's.
+  fs.writeFileSync(cuesFile, text.replace(/\n/g, "\r\n"));
+  const run = cli([file, "--length", "12", "--voice", fixture("voice").file, "--out", folder]);
+  assert.equal(run.status, 0, run.stderr);
 });
 
 test("a file counts as the earlier run's only while it is as that run wrote it, so a copied cues.json never makes the user's files musicfit's", () => {

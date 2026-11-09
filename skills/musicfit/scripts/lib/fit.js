@@ -16,7 +16,7 @@ const { plan } = require("./plan");
 const { assemble, speech, BLIP, floorOf, duck, normalize, setOver, cameOut, setWhere, scale, attackNear } = require("./render");
 const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
 const { seamsPng } = require("./draw");
-const { claim, begin, sameFile, cuesAt } = require("./out");
+const { claim, begin, sameFile, cuesAt, record } = require("./out");
 const { blocks } = require("./breathe");
 const version = require("./version");
 
@@ -279,7 +279,7 @@ async function make(track, options, run, video, writes) {
     const c = analysisCues({ version, track: trackName, analysis: a, options });
     fs.writeFileSync(run.file("FIT.md"), analysisMarkdown(c, { trackName }));
     fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
-    writeCues(run, c);
+    await record(run, c);
     return { cues: c, analysis: a };
   }
 
@@ -390,17 +390,8 @@ async function make(track, options, run, video, writes) {
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice, video: laid });
   fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName }));
   fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
-  writeCues(run, c);
+  await record(run, c);
   return { cues: c, analysis: a, plan: p };
-}
-
-// cues.json, written last: with the size in bytes of each file the run
-// wrote beside it, so a later run knows them for this run's only while
-// they are as it wrote them (see earlier() in out.js).
-function writeCues(run, c) {
-  c.sizes = {};
-  for (const name of [c.file, c.mix, c.video && c.video.file, "seams.png", "FIT.md"].filter(Boolean)) c.sizes[name] = fs.statSync(run.file(name)).size;
-  fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
 }
 
 module.exports = { fit, files, slug, outDir };
