@@ -212,9 +212,10 @@ const heldAtCeiling = (truePeak) => truePeak !== null && truePeak <= -1 && trueP
 
 // How the fitted file opens: on its first bar at the top (top), as the
 // track does, or later in the track (later), as a fit too short for the
-// track's opening and its ending both can; after silence or the track's
-// own lead in (silence, pickup); with the end of the bar before fading in
-// (swell); or part way into a bar (mid-bar).
+// track's opening and its ending both can, on its first bar or just before
+// it; after silence or the track's own lead in (silence, pickup); with the
+// end of the bar before fading in, to land a hit (swell); or part way into a
+// bar (mid-bar).
 function startKind(a, p, r) {
   const head = r.head;
   const first = p.segments[0].firstBar;
@@ -224,7 +225,9 @@ function startKind(a, p, r) {
     if (a.start.pickup > 0.05) return { kind: "pickup", music: r3(Math.max(0, head - a.start.pickup)) };
     return { kind: "silence", music: r3(head) };
   }
-  return { kind: "swell", music: 0 };
+  // Only a hit moves the first bar for a reason of its own. Without one a
+  // later first bar is a fit too short for the track's opening.
+  return { kind: p.hit ? "swell" : "later", music: 0 };
 }
 
 // ─── FIT.md ────────────────────────────────────────────────────────────────
@@ -364,8 +367,11 @@ function startText(c) {
   const first = s.firstBar ? `${sec(s.firstBar.time)}` : "";
   if (s.kind === "top") return "the music starts at the top, as the track does";
   if (s.kind === "later") {
-    const first = c.segments[0];
-    return `the music starts ${first.sourceBars ? `on bar ${first.sourceBars[0]} of the track (${sec(first.source[0])} there)` : `${sec(first.source[0])} into the track`}, not at its top`;
+    const bars = c.segments[0].sourceBars;
+    const at = sec(c.segments[0].source[0]);
+    // A head of a few milliseconds is on the bar, as near as anyone hears.
+    const lead = s.firstBar && s.firstBar.time > 0.02 ? `${sec(s.firstBar.time)} before` : "on";
+    return `the music starts ${bars ? `${lead} bar ${bars[0]} of the track (${at} there)` : `${at} into the track`}, not at its top`;
   }
   if (s.kind === "silence") return `silence, then the music comes in on its first bar at ${first}`;
   if (s.kind === "pickup") return `the track's own lead in, with the first bar at ${first}`;

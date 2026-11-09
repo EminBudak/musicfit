@@ -13,6 +13,7 @@ const { decode } = require("../skills/musicfit/scripts/lib/audio");
 const { analyze } = require("../skills/musicfit/scripts/lib/analyze");
 const { fit } = require("../skills/musicfit/scripts/lib/fit");
 const { fixture, outDir, matched } = require("./helpers");
+const { writeWav } = require("./synth");
 
 const CLI = path.resolve(__dirname, "../skills/musicfit/scripts/musicfit.js");
 const RATE = 48000;
@@ -154,6 +155,33 @@ test("a fit too short for the track's opening and its ending both can start late
   const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
   assert.ok(md.includes(`| 0.00 s | 0 | start | the music starts on bar ${cues.segments[0].sourceBars[0]} of the track (${from.toFixed(2)} s there), not at its top |`), md);
   assert.doesNotMatch(md, /as the track does/);
+});
+
+test("a short fit of a track whose first bar comes a moment in starts later too, and FIT.md names the bar; a fit with a hit keeps its swell", async () => {
+  const x = await decode(fixture("offbeat").file, { rate: RATE, channels: 2 });
+  // A moment of sound before its first bar, as the end of a bar a music
+  // model cut off: 10 ms, then 300 ms.
+  for (const [head, lead] of [[RATE / 100, "on"], [(RATE * 3) / 10, "0.30 s before"]]) {
+    const L = new Float32Array(head + x.length / 2);
+    const R = new Float32Array(head + x.length / 2);
+    for (let i = 0; i < head; i++) L[i] = R[i] = 0.1 * Math.sin(i / 8);
+    for (let i = 0; i < x.length / 2; i++) {
+      L[head + i] = x[2 * i];
+      R[head + i] = x[2 * i + 1];
+    }
+    const file = outDir(`offbeat-head-${head}.wav`);
+    writeWav(file, { rate: RATE, L, R });
+    const out = outDir(`offbeat-head-${head}`);
+    const { cues } = await fit(file, { ...defaults, length: 10, out });
+    assert.ok(Math.abs(cues.start.firstBar.time - head / RATE) < 0.005, `its first bar is at ${cues.start.firstBar.time} s`);
+    assert.equal(cues.start.kind, "later");
+    assert.ok(cues.segments[0].source[0] > 1, `the fit starts ${cues.segments[0].source[0]} s into the track`);
+    const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
+    assert.ok(md.includes(`| 0.00 s | 0 | start | the music starts ${lead} bar ${cues.segments[0].sourceBars[0]} of the track (${cues.segments[0].source[0].toFixed(2)} s there), not at its top |`), md);
+    assert.doesNotMatch(md, /fades in over/);
+  }
+  const { cues } = await fit(fixture("offbeat").file, { ...defaults, length: 10, hit: 0.5, out: outDir("offbeat-swell") });
+  assert.equal(cues.start.kind, "swell");
 });
 
 test("ducked under a voice: the music dips about --duck dB where it speaks, and mix.wav has both", async () => {
