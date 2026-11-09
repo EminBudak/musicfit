@@ -70,9 +70,10 @@ const seconds = (spans) => spans.reduce((sum, [from, to]) => sum + (to - from), 
 const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 // Every input is looked at before any work, and one that is not there, is
-// a folder or may not be read is refused by its name: ffmpeg 7 and newer
-// say only "Error opening input: Permission denied", which does not tell
-// the track from the voice or the video.
+// a folder or may not be read is refused by its name. ffmpeg 8 says "Error
+// opening input: Permission denied" and names the file only on the line
+// after it, one of the closing lines reason() in audio.js leaves out, so
+// the run could not tell the track from the voice or the video.
 function files(track, options) {
   const inputs = [track, options.voice, options.video].filter(Boolean);
   for (const name of inputs) {

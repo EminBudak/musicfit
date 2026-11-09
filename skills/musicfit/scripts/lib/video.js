@@ -271,10 +271,10 @@ async function ownSound(file, n, start) {
 // encoded again, up to 2.4 dB, so a sound limited further could come out
 // higher; at 256 it lifted it by half a dB at most but once, by 1 dB. With
 // ffmpeg's fast coder, the default of ffmpeg 4.4, on every ffmpeg: twoloop,
-// the default of ffmpeg 7 and newer and there in 4.4 too, lifted the true
-// peak of a loud fit held to -1 dBTP to +3.3 dBTP on both, and limiting it
-// again to take that off took loudness with it. Both versions know the
-// coder by this name.
+// the default of ffmpeg 5.0 and newer and there in 4.4 too, lifted the true
+// peak of a loud fit held to -1 dBTP to +3.3 dBTP on 4.4 and 8 alike, and
+// limiting it again to take that off took loudness with it. Both versions
+// know the coder by this name.
 async function encodeAac(samples, file) {
   await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-aac_coder", "fast", "-b:a", "256k", "-y", where(file)], samples);
 }
