@@ -211,11 +211,12 @@ function summary({ dir, cues: c }) {
 // it, by the same Ctrl-C, and the run has just failed over that, and when
 // it is stopped before it began, while it reads the video's frame rate. A
 // second signal, like the copy makersmcp's supervisor passes on a moment
-// after the one its process group got, finds the listener still there and
-// changes nothing. The signals are those that end a process and can be
-// caught: Ctrl-C, Ctrl-\, a hang-up, and those a supervisor, a timer or a
-// limit on processor time sends; Ctrl-Break on Windows. A signal no process
-// can catch, as kill -9 sends, leaves the hidden folder (see out.js).
+// after the one its process group got, changes nothing: the first has by
+// then tidied up, without yielding, and ended the process. The signals are
+// those that end a process and can be caught: Ctrl-C, Ctrl-\, a hang-up,
+// and those a supervisor, a timer or a limit on processor time sends;
+// Ctrl-Break on Windows. A signal no process can catch, as kill -9 sends,
+// leaves the hidden folder (see out.js).
 const SIGNALS = process.platform === "win32" ? ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] : ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGUSR2", "SIGALRM", "SIGXCPU"];
 // Raised again, these would write the whole process to a core file: the run
 // ends with their exit code instead.
@@ -236,7 +237,6 @@ function say(fd, text) {
 function stopOnSignals(json) {
   for (const signal of SIGNALS) {
     process.on(signal, () => {
-      if (stopping) return;
       stopping = true;
       const stopped = stopAll();
       for (const said of stopped.length || !pending ? stopped : [`${pending} is as it was`]) {
