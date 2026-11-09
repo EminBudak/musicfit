@@ -279,14 +279,16 @@ function fitMarkdown(c, { trackName }) {
     const short = !c.voice && !dips && c.loudness.integrated < c.loudness.target - 0.5;
     const how = c.loudness.limited ? `, with a limiter holding the true peaks at ${c.loudness.truePeak} dBTP` : " with one gain change";
     const where = c.voice && dips ? ` where nobody speaks and ${c.video.source}'s own sound does not play` : c.voice ? " where nobody speaks" : dips ? ` where ${c.video.source}'s own sound does not play` : "";
-    if (short) lines.push(`${step}. Loudness raised toward ${c.loudness.target} LUFS but stopped at ${c.loudness.integrated} LUFS${how}: any louder and the peaks would pass -1 dBTP.`);
+    // Stopped for the peaks only when they are held under -1 dBTP.
+    if (short) lines.push(`${step}. Loudness raised toward ${c.loudness.target} LUFS but stopped at ${c.loudness.integrated} LUFS${how}${c.loudness.truePeak <= -1 ? ": any louder and the peaks would pass -1 dBTP" : ""}.`);
     else lines.push(`${step}. Loudness set to ${c.loudness.target} LUFS${where}${how}.`);
   }
   if (c.video) {
     const step = c.segments.length + (c.voice || dips ? 1 : 0) + (c.loudness && c.loudness.integrated !== null ? 1 : 0) + 1;
     // The level it was set to, or where it stopped short of the target.
-    const { target, integrated } = c.video.loudness;
-    const level = integrated !== null && integrated < target - 0.5 ? `the whole raised toward ${target} LUFS but stopped at ${integrated} LUFS, measured after the AAC encoding: any louder and its true peaks would pass -1 dBTP` : `the whole set to ${target} LUFS, measured after the AAC encoding`;
+    const { target, integrated, truePeak } = c.video.loudness;
+    const held = truePeak !== null && truePeak <= -1;
+    const level = integrated !== null && integrated < target - 0.5 ? `the whole raised toward ${target} LUFS but stopped at ${integrated} LUFS${held ? "" : ` with true peaks at ${truePeak} dBTP`}, measured after the AAC encoding${held ? ": any louder and its true peaks would pass -1 dBTP" : ""}` : `the whole set to ${target} LUFS, measured after the AAC encoding`;
     lines.push(`${step}. ${c.video.source}'s picture copied packet for packet into \`video.mp4\`, with ${underVideo(c)}, ${level}.`);
   }
   lines.push("");

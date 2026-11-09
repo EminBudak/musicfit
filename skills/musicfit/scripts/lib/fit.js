@@ -383,7 +383,9 @@ async function make(track, options, run, video, writes) {
     const held = (places || []).filter((p) => p.over !== null && Math.round(p.over * 10) / 10 < KEEP_OVER - 0.5);
     if (held.length) options.warnings.push(heldPlaces(picture.name, held, places.length, options.lufs));
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
-    if (Number.isFinite(level.integrated) && level.integrated < options.lufs - 0.5) options.warnings.push(`video.mp4 is at ${level.integrated.toFixed(1)} LUFS after the AAC encoding, short of the ${options.lufs} LUFS asked for: any louder and its true peaks would pass -1 dBTP.`);
+    // Short of the target: for its true peaks, when they are held under
+    // -1 dBTP; else the note before gives them.
+    if (Number.isFinite(level.integrated) && level.integrated < options.lufs - 0.5) options.warnings.push(`video.mp4 is at ${level.integrated.toFixed(1)} LUFS after the AAC encoding, short of the ${options.lufs} LUFS asked for${level.truePeak <= -1 ? ": any louder and its true peaks would pass -1 dBTP" : ""}.`);
   }
 
   await encodeWav(music, run.file("fitted.wav"));
