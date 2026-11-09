@@ -243,8 +243,9 @@ let hooked = false;
 
 // begin(dir): a run that writes in `dir`. file(name) is where it writes an
 // output, scratch(name) where it keeps what is not one; the hidden folder
-// both are in is made by the first of them. commit() puts the outputs in
-// place, abort() leaves no trace.
+// both are in is made by the first of them. earlier() names the earlier
+// run's files in `dir` as they are now, commit() puts the outputs in place
+// and removes those, abort() leaves no trace.
 function begin(dir) {
   const state = {
     dir,
@@ -254,6 +255,7 @@ function begin(dir) {
     ended: false,
     file: (name) => path.join(open(state), name),
     scratch: (name) => path.join(open(state), ".tmp", name),
+    earlier: () => earlier(state.target),
     commit: () => commit(state),
     abort: () => abort(state),
     explain: (err) => explain(state, err),

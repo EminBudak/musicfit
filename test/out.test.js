@@ -598,6 +598,34 @@ test("a file counts as the earlier run's only while it is as that run wrote it, 
   assert.ok(fs.readFileSync(path.join(unmarked, "video.mp4")).equals(video));
 });
 
+test("a run that ends well names the earlier run's files it removed: an analysis in a fit's folder, a fit without --video in the folder of one with it", () => {
+  const { file } = fixture("house");
+  const { folder } = videoFit("removed-by-analysis");
+  const copy = outDir("removed-by-fit");
+  fs.cpSync(folder, copy, { recursive: true });
+  const said = (run, note) => {
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, new RegExp(`\n  Note    ${quote(note)}\n`));
+  };
+  const read = cli([file, "--analyze", "--out", folder]);
+  const note = `This run removed the earlier fit's fitted.wav, mix.wav and video.mp4 from ${folder}, as it writes none of them.`;
+  said(read, note);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).warnings.includes(note));
+  assert.ok(fs.readFileSync(path.join(folder, "FIT.md"), "utf8").includes(`\n- ${note}\n`));
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "seams.png"]);
+  // A fit with the voice and no video: only video.mp4 goes, and in --json too.
+  const fit = cli([file, "--length", "12", "--voice", fixture("voice").file, "--out", copy, "--json"]);
+  assert.equal(fit.status, 0, fit.stderr);
+  assert.ok(JSON.parse(fit.stdout).warnings.includes(`This run removed the earlier fit's video.mp4 from ${copy}, as it does not write one.`), fit.stdout);
+  assert.ok(fs.readFileSync(path.join(copy, "FIT.md"), "utf8").includes(`This run removed the earlier fit's video.mp4 from ${copy}`));
+  // Then without the voice: mix.wav goes.
+  said(cli([file, "--length", "12", "--out", copy]), `This run removed the earlier fit's mix.wav from ${copy}, as it does not write one.`);
+  // A run that writes all the earlier run wrote removes nothing, and says nothing of it.
+  const again = cli([file, "--length", "12", "--out", copy]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /This run removed/);
+});
+
 test("an input that is a file the run replaces or removes once it ends well is refused before any work", () => {
   const { file } = fixture("house");
   const folder = goodFit("inputs-inside");

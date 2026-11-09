@@ -113,7 +113,7 @@ async function fit(track, options) {
     // is refused first.
     const video = o.video && !o.analyze ? await readVideo(track, o) : null;
     if (o.fps === undefined) o.fps = 30;
-    const result = await make(track, o, run, video);
+    const result = await make(track, o, run, video, writes);
     await run.commit();
     return { dir, ...result };
   } catch (err) {
@@ -243,10 +243,25 @@ async function aac(sound, file, lufs) {
   return best.m;
 }
 
+// The note for the earlier run's files that a run which ends well removes,
+// as it does not write them again: a fit's sound or video, when an
+// analysis, or a fit without a voice or a video, is given its folder.
+function removedNote(names, dir) {
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const none = names.length === 1 ? "does not write one" : names.length === 2 ? "writes neither" : "writes none of them";
+  return `This run removed the earlier fit's ${list} from ${dir}, as it ${none}.`;
+}
+
 // The run's work, its files written with run.file(name). A long fit holds a
 // few arrays of samples as long as it, so each is let go, or written and
-// let go, as soon as it has served.
-async function make(track, options, run, video) {
+// let go, as soon as it has served. `writes` are the names it writes, so
+// the reports can name the earlier run's files it removes.
+async function make(track, options, run, video, writes) {
+  // Looked at once the work is done, just before the reports are written.
+  const removes = () => {
+    const gone = run.earlier().filter((name) => !writes.includes(name));
+    if (gone.length) options.warnings.push(removedNote(gone, run.dir));
+  };
   const log = options.log || (() => {});
   const trackName = path.basename(track);
   log(`Reading ${trackName}`);
@@ -263,6 +278,7 @@ async function make(track, options, run, video) {
   else log("No steady beat");
 
   if (options.analyze) {
+    removes();
     const c = analysisCues({ version, track: trackName, analysis: a, options });
     fs.writeFileSync(run.file("FIT.md"), analysisMarkdown(c, { trackName }));
     fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
@@ -372,6 +388,7 @@ async function make(track, options, run, video) {
   }
 
   await encodeWav(music, run.file("fitted.wav"));
+  removes();
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice, video: laid });
   fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName }));
   fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));

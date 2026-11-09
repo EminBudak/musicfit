@@ -169,7 +169,7 @@ function analysisCues({ version, track, analysis: a, options }) {
     confidence: confidenceOf(a),
     sections: a.mode === "energy" ? [] : a.sections.map((i) => ({ time: r3(Math.max(0, a.bars[i].start)), frame: frame(Math.max(0, a.bars[i].start)), bar: i + 1 })),
     source: sourceOf(a),
-    warnings: a.warnings,
+    warnings: [...a.warnings, ...(options.warnings || [])],
   };
 }
 
