@@ -344,7 +344,8 @@ async function make(track, options, run, video, writes) {
     if (voiced > n + RATE * 0.05) options.warnings.push(`The voice runs ${(voiced / RATE - options.length).toFixed(2)} s past the end and was cut there.`);
     if (!spans.length) options.warnings.push("No speech was found in the voice track, so the music was not ducked.");
   }
-  // The music now dips, so it reads quieter as a whole.
+  // The music now dips, so as a whole it reads off the target: quieter,
+  // or louder when the meter's gate leaves the dipped stretches out.
   if (options.voice || dips.length) loudness.after = await measure(music);
 
   let laid = null;

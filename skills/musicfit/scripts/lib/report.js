@@ -282,7 +282,8 @@ function fitMarkdown(c, { trackName }) {
   }
   if (c.loudness && c.loudness.integrated !== null) {
     const step = c.segments.length + (c.voice || dips ? 2 : 1);
-    // A music that dips reads quieter as a whole than where it does not.
+    // A music that dips reads off the target as a whole, so only one that
+    // does not dip is said to have stopped short of it.
     const short = !c.voice && !dips && c.loudness.integrated < c.loudness.target - 0.5;
     const how = c.loudness.limited ? `, with a limiter holding the true peaks at ${c.loudness.truePeak} dBTP` : " with one gain change";
     const where = c.voice && dips ? ` where nobody speaks and ${c.video.source}'s own sound does not play` : c.voice ? " where nobody speaks" : dips ? ` where ${c.video.source}'s own sound does not play` : "";
