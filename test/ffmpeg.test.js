@@ -38,11 +38,12 @@ test("an ffmpeg that refuses a value of the loudness meter is named with that li
   assert.doesNotMatch(run.stderr, /Conversion failed|Error opening output files/);
 });
 
-test("the line that says why is found in what ffmpeg 4.4 and 8 print", () => {
+test("the line that says why is found in what ffmpeg 4.4, 6.1 and 8 print", () => {
   const said = (name) => fs.readFileSync(path.join(FIXTURES, "stderr", `${name}.txt`), "utf8");
   const cases = {
     // Written in two parts, so the meter's settings in it are not read as a framelog value musicfit asks for.
     "framelog-4.4": "ffmpeg: Error initializing filter 'ebur128' with args 'peak=true:framelog" + "=bogus'",
+    "framelog-6.1": "ffmpeg: Error applying option 'framelog' to filter 'ebur128': Invalid argument",
     "framelog-8.0": "ffmpeg: Error applying option 'framelog' to filter 'ebur128': Invalid argument",
     "no-folder-4.4": "ffmpeg: /nonexistent/dir/fitted.wav: No such file or directory",
     "no-folder-8.0": "ffmpeg: Error opening output /nonexistent/dir/fitted.wav: No such file or directory",

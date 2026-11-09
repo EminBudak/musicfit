@@ -56,13 +56,14 @@ const where = (file) => whole(file);
 
 // What ffmpeg prints once it has given up, after the line that says why:
 // how it stopped, which says nothing of the cause. ffmpeg 4.4 ends with the
-// first five, ffmpeg 7 and newer with the others.
+// first five, newer ones with the others.
 const CLOSING = [
   /^Conversion failed!?$/,
   /^Error while processing the decoded data/,
   /^Failed to inject frame into filter network/,
   /^Error reinitializing filters!?$/,
   /^Exiting normally/,
+  /^Error initializing a simple filtergraph$/,
   /^Error opening (input|output) files?\b/,
   /^Error selecting an encoder$/,
   /^Error closing file\b/,

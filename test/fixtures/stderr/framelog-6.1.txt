@@ -1,0 +1,6 @@
+[Parsed_ebur128_0 @ 0x55a938b7be80] [Eval @ 0x7ffc5822fa60] Undefined constant or missing '(' in 'bogus'
+[Parsed_ebur128_0 @ 0x55a938b7be80] Unable to parse option value "bogus"
+Error applying option 'framelog' to filter 'ebur128': Invalid argument
+[aost#0:0/pcm_s16le @ 0x55a938b7b580] Error initializing a simple filtergraph
+Error opening output file -.
+Error opening output files: Invalid argument
