@@ -248,7 +248,7 @@ async function ownSound(file, n, start, stream = 0) {
 // The sound as AAC in an .m4a of its own, to be measured as a player hears
 // it before the picture is copied over it once. At 256 kb/s: at 192 the
 // encoder's noise around a sharp sound lifted the true peak by up to 1.1 dB
-// in the study's films, and by another amount each time the sound was
+// in two launch films, and by another amount each time the sound was
 // encoded again, up to 2.4 dB, so a sound limited further could come out
 // higher; at 256 it lifted it by half a dB at most but once, by 1 dB. With
 // ffmpeg's fast coder, the default of ffmpeg 4.4, on every ffmpeg: twoloop,
