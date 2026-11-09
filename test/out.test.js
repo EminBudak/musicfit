@@ -1035,6 +1035,23 @@ test("a stop while the run reads the video's frame rate, before it began, is sai
   assert.ok(!fs.existsSync(folder));
 });
 
+test("a stop while the run reads the video's frame rate, whose ffmpeg ended a moment before it, is told as a stop too", posix, async () => {
+  const film = path.join(dir, "rate-film-dies.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const folder = path.join(dir, "stopped-at-rate-dies");
+  const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "300f", "--video", film, "--video-sound", "drop", "--out", folder, "--json"], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "diesfirst", "ffmpeg"), MUSICFIT_TEST_DIES: "rate" } });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (d) => (stdout += d));
+  child.stderr.on("data", (d) => (stderr += d));
+  const [code, signal] = await new Promise((resolve) => child.on("exit", (...end) => resolve(end)));
+  assert.equal(signal, "SIGINT", `${code} ${stderr}`);
+  assert.equal(stderr, `musicfit: stopped, so ${folder} is as it was\n`);
+  assert.deepEqual(JSON.parse(stdout), { ok: false, error: `stopped, so ${folder} is as it was` });
+  assert.ok(!fs.existsSync(folder));
+});
+
 test("a fit whose commit fails says where the earlier files went, in a folder that is there, also when the disk is full", async () => {
   const { fit } = require("../skills/musicfit/scripts/lib/fit");
   const { file } = fixture("house");

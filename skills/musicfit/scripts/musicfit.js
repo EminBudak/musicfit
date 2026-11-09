@@ -281,6 +281,8 @@ async function main() {
       files(options.track, options);
       await atVideoRate(options);
     } catch (err) {
+      // As for a run that has begun, below.
+      if (err.stopped) await new Promise((resolve) => setTimeout(resolve, 1000));
       if (stopping) return;
       return fail(err.message, 1);
     }

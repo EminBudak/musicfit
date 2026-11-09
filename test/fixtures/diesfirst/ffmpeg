@@ -1,13 +1,14 @@
 #!/bin/sh
 # Ctrl-C reaches the whole process group: this ffmpeg, which writes a WAV,
-# or with $MUSICFIT_TEST_DIES set to readback reads video.mp4 back, ends at
-# once, as ffmpeg does on SIGINT at -v error: it says nothing and exits with
-# 255. node hears its own SIGINT a moment later, once it has taken in that
-# ffmpeg failed. The SIGINT comes from a process that holds none of
-# ffmpeg's pipes, so they close now.
+# or with $MUSICFIT_TEST_DIES set to readback reads video.mp4 back, or set
+# to rate lists a video's frames for its frame rate, ends at once, as ffmpeg
+# does on SIGINT at -v error: it says nothing and exits with 255. node hears
+# its own SIGINT a moment later, once it has taken in that ffmpeg failed.
+# The SIGINT comes from a process that holds none of ffmpeg's pipes, so they
+# close now.
 prev=
 for arg do
-  if { [ "$MUSICFIT_TEST_DIES" != readback ] && [ "$arg" = pcm_s24le ]; } || { [ "$MUSICFIT_TEST_DIES" = readback ] && [ "$prev" = -map ] && [ "$arg" = 0 ]; }; then
+  if { [ "$MUSICFIT_TEST_DIES" != readback ] && [ "$MUSICFIT_TEST_DIES" != rate ] && [ "$arg" = pcm_s24le ]; } || { [ "$MUSICFIT_TEST_DIES" = readback ] && [ "$prev" = -map ] && [ "$arg" = 0 ]; } || { [ "$MUSICFIT_TEST_DIES" = rate ] && [ "$arg" = framecrc ]; }; then
     (sleep 0.3; kill -INT $PPID) </dev/null >/dev/null 2>&1 &
     exit 255
   fi
