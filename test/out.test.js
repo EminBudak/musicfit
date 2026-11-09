@@ -1156,6 +1156,25 @@ test("a commit that fails with only a new file stuck in the out folder leaves no
   for (const name of ["fitted.wav", "seams.png", "FIT.md"]) assert.equal(fs.readFileSync(path.join(folder, name), "utf8"), `old ${name}\n`);
 });
 
+test("a run that has put its files in place ends well, though its own hidden folder cannot be looked at once it is removed", async () => {
+  const folder = goodFit("unseen-hidden");
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  const real = fs.lstatSync;
+  try {
+    // The system refuses the look that says whether the folder has gone.
+    fs.lstatSync = (at, ...rest) => {
+      if (String(at) === run.work) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      return real(at, ...rest);
+    };
+    await run.commit();
+  } finally {
+    fs.lstatSync = real;
+  }
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) assert.equal(fs.readFileSync(path.join(folder, name), "utf8"), `new ${name}\n`);
+});
+
 test("a run whose hidden folder cannot be removed says so, when its commit fails and when it fails before", async () => {
   const real = { rmSync: fs.rmSync, openSync: fs.openSync, writeFileSync: fs.writeFileSync };
   // The hidden folder stays, as one in a folder that may not be changed does.
