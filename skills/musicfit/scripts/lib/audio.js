@@ -184,17 +184,17 @@ async function floats(chunks) {
   return out;
 }
 
-// The first audio stream of any file ffmpeg reads (a video's too), as
-// interleaved floats at the given rate and channel count. With `from` it is
-// read on the file's own timeline from that second on, for a video's own
-// sound from its picture's first frame: cut where the sound starts before
-// it, silence where the sound starts after it or has a gap, so a second
-// into the sound is a second into the picture.
-async function decode(file, { rate = RATE, channels = 2, from = null } = {}) {
+// The first audio stream of any file ffmpeg reads (a video's too), or the
+// one numbered `stream` from 0, as interleaved floats at the given rate and
+// channel count. With `from` it is read on the file's own timeline from that
+// second on, for a video's own sound from its picture's first frame: cut
+// where the sound starts before it, silence where the sound starts after it
+// or has a gap, so a second into the sound is a second into the picture.
+async function decode(file, { rate = RATE, channels = 2, from = null, stream = 0 } = {}) {
   const timeline = from === null ? [] : ["-copyts"];
   const align = from === null ? [] : ["-af", `aresample=${rate}:async=1:first_pts=${Math.round(from * rate)}`];
   try {
-    const { chunks } = await run(["-v", "error", ...timeline, "-i", where(file), "-map", "0:a:0", "-vn", ...align, "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
+    const { chunks } = await run(["-v", "error", ...timeline, "-i", where(file), "-map", `0:a:${stream}`, "-vn", ...align, "-ac", String(channels), "-ar", String(rate), "-f", "f32le", "pipe:1"]);
     const samples = await floats(chunks);
     if (!samples.length) throw new Error(`${file} has no audio`);
     return samples;

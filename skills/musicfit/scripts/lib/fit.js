@@ -159,14 +159,33 @@ async function readVideo(track, o) {
   const video = { picture, sound, same, own: null, spans: [] };
   if (sound === "drop" || sound === "none") return video;
   o.log && o.log(`Reading ${picture.name}'s own sound`);
+  // Of several sound streams the first is read and laid in.
+  if (picture.sounds > 1) o.warnings.push(`${picture.name} has ${picture.sounds} sound streams and only the first is read: what the others hold is not in video.mp4.`);
   // As long as the picture, so the sound under it is made in its place.
-  const own = await ownSound(o.video, Math.round(picture.seconds * RATE), picture.start);
-  if (!own) return { ...video, sound: "none" };
+  const samples = Math.round(picture.seconds * RATE);
+  const own = await ownSound(o.video, samples, picture.start);
   // Every sound in it that stands out, the shortest click included.
-  const heard = await speech(own, { shortest: 0 });
+  const heard = own ? await speech(own, { shortest: 0 }) : [];
   // A sound that never goes quiet, like a music bed, plays all the way
   // through even where speech() hears no more than a steady floor.
-  const plays = (await floorOf(own)) > -40 ? o.length : seconds(heard);
+  const playing = async (x, stands) => ((await floorOf(x)) > -40 ? o.length : seconds(stands));
+  const plays = own ? await playing(own, heard) : 0;
+  // Sound in a later stream, under a first with none to speak of, is the
+  // video's own sound too, and would be left out without a word.
+  if (sound === undefined && !(plays > 0)) {
+    for (let k = 1; k < picture.sounds; k++) {
+      let other = null;
+      try {
+        other = await ownSound(o.video, samples, picture.start, k);
+      } catch (err) {
+        // A stream ffmpeg cannot read is one musicfit cannot lay in anyway.
+        if (err.stopped) throw err;
+      }
+      const later = other ? await playing(other, await speech(other, { shortest: 0 })) : 0;
+      if (later > 0) throw new Error(`${picture.name} has ${picture.sounds} sound streams and musicfit reads only the first, which is silent or nearly so, while number ${k + 1} plays for ${later < 0.1 ? later.toFixed(2) : later.toFixed(1)} of its ${o.length.toFixed(1)} s: give --video a copy with that sound first, or --video-sound drop to go on without it`);
+    }
+  }
+  if (!own) return { ...video, sound: "none" };
   if (sound === undefined && plays > 0) {
     throw new Error(`${picture.name} has sound of its own for ${plays < 0.1 ? plays.toFixed(2) : plays.toFixed(1)} of its ${o.length.toFixed(1)} s, so say what becomes of it with --video-sound: keep for sound effects (they stay, ${KEEP_OVER} dB louder than the music where they play, and where their peaks leave no room for that the music dips under them, ${num(o.duck)} dB at most), voice for speech (set to ${o.lufs} LUFS where it plays, and the music dips ${num(o.duck)} dB under it), or drop for music of its own (left out)`);
   }
