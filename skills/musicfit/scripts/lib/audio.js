@@ -27,7 +27,7 @@ function whole(name) {
 function ffmpegPath() {
   const named = process.env.FFMPEG_PATH;
   if (!named) return "ffmpeg";
-  return path.basename(named) === named ? named : path.resolve(named);
+  return path.basename(named) === named ? named : whole(named);
 }
 
 // The environment for a call run in another folder: a relative entry of PATH
@@ -52,7 +52,7 @@ function fromHere() {
 // A file as ffmpeg is given it: by its full path, since ffmpeg takes a name
 // whose part before a colon is all letters and digits (9:16.mp4) for a
 // protocol, and never a full path.
-const where = (file) => path.resolve(file);
+const where = (file) => whole(file);
 
 // What ffmpeg prints once it has given up, after the line that says why:
 // how it stopped, which says nothing of the cause. ffmpeg 4.4 ends with the

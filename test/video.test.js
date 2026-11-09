@@ -1319,6 +1319,20 @@ test("on Windows a PATH entry in quotes is read without them, one with a ; insid
   }
 });
 
+test("FFMPEG_PATH, a track, a voice and a video named through a link and up again are found where the system finds them", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const root = throughLink("named-through-link");
+  fs.copyFileSync(fixture("house").file, path.join(root, "Y", "track.wav"));
+  fs.copyFileSync(speech(), path.join(root, "Y", "voice.wav"));
+  fs.copyFileSync(film("mute"), path.join(root, "Y", "film.mp4"));
+  const { FFMPEG_PATH, ...rest } = process.env;
+  for (const [kind, up] of [["relative", "X/link/.."], ["absolute", `${root}/X/link/..`]]) {
+    const out = at(`named-through-link-${kind}`);
+    const run = spawnSync(process.execPath, [CLI, `${up}/track.wav`, "--length", "12", "--hit", "8", "--voice", `${up}/voice.wav`, "--video", `${up}/film.mp4`, "--out", out], { cwd: root, encoding: "utf8", env: { ...rest, FFMPEG_PATH: `${up}/bin/ffmpeg` } });
+    assert.equal(run.status, 0, `${kind}: ${run.stderr}`);
+    assert.ok(fs.existsSync(path.join(out, "video.mp4")), kind);
+  }
+});
+
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
   const { fitMarkdown, underVideo } = require("../skills/musicfit/scripts/lib/report");
   const base = {
