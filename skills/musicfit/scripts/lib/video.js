@@ -230,7 +230,7 @@ async function ownSound(file, n, start) {
 // limiting it again to take that off took loudness with it. Both versions
 // know the coder by this name.
 async function encodeAac(samples, file) {
-  await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-aac_coder", "fast", "-b:a", "256k", "-y", where(file)], samples);
+  await run(["-v", "error", "-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "pipe:0", "-c:a", "aac", "-aac_coder", "fast", "-b:a", "256k", "-y", where(file)], samples, { writes: where(file) });
 }
 
 // The video's picture, copied packet for packet, over `sound` (an .m4a),
@@ -241,7 +241,7 @@ async function encodeAac(samples, file) {
 // not make. HEVC is tagged hvc1, the tag QuickTime, Safari and iOS play.
 async function mux(file, sound, out, { picture, comment, start }) {
   const tag = picture === "hevc" ? ["-tag:v", "hvc1"] : [];
-  await run(["-v", "error", "-copyts", "-itsoffset", (-start).toFixed(6), "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)]);
+  await run(["-v", "error", "-copyts", "-itsoffset", (-start).toFixed(6), "-i", where(file), "-i", where(sound), "-map", "0:V:0", "-map", "1:a:0", "-c", "copy", ...tag, "-metadata", `comment=${comment}`, "-movflags", "+faststart", "-y", where(out)], null, { writes: where(out) });
   // Read back, every packet of it, before the run may put it in place: an
   // MP4 whose index did not get written is no video, whatever ffmpeg said.
   let why = null;

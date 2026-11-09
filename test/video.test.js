@@ -932,6 +932,18 @@ test("a track, a voice and a video named like 16:9 mix.wav or 9:16.mp4 are read 
   assert.deepEqual(packets(path.join(cwd, "fit", "video.mp4")), packets(path.join(cwd, "9:16.mp4")));
 });
 
+test("a video or an out folder whose name holds a line of ffmpeg's words for a file it could not finish is not taken for one", { skip: process.platform === "win32" ? "Windows names take no line break" : false }, () => {
+  const cwd = at("trailer-names");
+  fs.mkdirSync(cwd, { recursive: true });
+  const odd = "odd\nError writing trailer";
+  fs.copyFileSync(film("film25", { sound: effects() }), path.join(cwd, `${odd}.mp4`));
+  // The out folder is there already, so the run's own files are read in it.
+  fs.mkdirSync(path.join(cwd, odd));
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", `${odd}.mp4`, "--video-sound", "keep", "--out", odd], { cwd, encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(fs.readdirSync(path.join(cwd, odd)).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png", "video.mp4"]);
+});
+
 test("a whole video whose name or tags hold the words ffmpeg prints for a damaged file is not taken for a damaged one", async () => {
   const { probe } = require("../skills/musicfit/scripts/lib/video");
   const named = at("partial file.mp4");

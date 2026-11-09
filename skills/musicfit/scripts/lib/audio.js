@@ -75,8 +75,14 @@ function reason(stderr, code, signal) {
 // ffmpeg 4.4 exits with 0 when it cannot finish a file: when the disk fills
 // as it writes an MP4's index or a WAV's sizes, it says "Error writing
 // trailer of <file>: No space left on device" and leaves a file no player
-// reads. A call that says so has failed, whatever its exit code.
-const UNFINISHED = /^(?:\[[^\]\n]*\][ \t]*)*Error writing trailer\b/m;
+// reads. A call that writes `file` and says so, in those words for that
+// file or in ffmpeg 7's for its output, has failed, whatever its exit
+// code. Nothing else it prints is read for them, so a file's name, as in
+// what ffmpeg says of a video it reads, is never taken for its words.
+function unfinished(stderr, file) {
+  const said = `\n${stderr}`;
+  return said.includes(`\nError writing trailer of ${file}: `) || /\n\[out#\d+\/\w+ @ 0x[0-9a-f]+\] Error writing trailer\b/.test(said);
+}
 
 // The ffmpeg processes running now, so a run that is stopped stops them
 // too: a signal sent to node alone does not reach them.
@@ -93,7 +99,9 @@ function stopChildren() {
   running.clear();
 }
 
-function run(args, input) {
+// Runs ffmpeg with `args`, and `input` on its stdin. `writes` is the file
+// the call writes, if any.
+function run(args, input, { writes = null } = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -115,7 +123,7 @@ function run(args, input) {
     child.on("close", (code, signal) => {
       running.delete(child);
       const stderr = Buffer.concat(err).toString("utf8");
-      if (code === 0 && !UNFINISHED.test(stderr)) resolve({ chunks: out, stderr });
+      if (code === 0 && !(writes && unfinished(stderr, writes))) resolve({ chunks: out, stderr });
       else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr, signal, stopped: stopped(stderr, code, signal) }));
     });
     if (input) {
@@ -204,7 +212,7 @@ async function decode(file, { rate = RATE, channels = 2, from = null } = {}) {
 // header's note of the ffmpeg that wrote it, so any ffmpeg writes the same
 // bytes for the same sound.
 async function encodeWav(samples, file, { rate = RATE, channels = 2 } = {}) {
-  await run(["-v", "error", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-c:a", "pcm_s24le", "-fflags", "+bitexact", "-y", where(file)], samples);
+  await run(["-v", "error", "-f", "f32le", "-ar", String(rate), "-ac", String(channels), "-i", "pipe:0", "-c:a", "pcm_s24le", "-fflags", "+bitexact", "-y", where(file)], samples, { writes: where(file) });
 }
 
 // EBU R128 loudness as ffmpeg's ebur128 meter reads it: integrated
