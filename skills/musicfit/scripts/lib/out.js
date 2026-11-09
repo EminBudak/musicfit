@@ -291,7 +291,8 @@ function open(state) {
     state.work = null;
     unmake(state.made);
     state.made = [];
-    throw told(new Error(`Cannot write to ${state.dir}: ${WHY[err.code] || err.message}${state.left ? `. ${asWas(state)}` : ""}`));
+    const why = ["ENOSPC", "EDQUOT"].includes(err.code) ? full(state, err.code) : `Cannot write to ${state.dir}: ${WHY[err.code] || err.message}`;
+    throw told(new Error(`${why}${state.left ? `. ${asWas(state)}` : ""}`));
   }
   return work;
 }
@@ -580,6 +581,13 @@ function keep(state, earlierStuck, newStuck) {
   }
 }
 
+// A full disk, in plain words. Where an earlier run's files are, they took
+// room too: they stay until the new ones are in place.
+function full(state, code) {
+  const room = earlier(state.target).length ? ". The earlier files there stay until the new ones are in place, so the run needs room for both: free some space, or give another --out" : "";
+  return `Cannot write to ${state.dir}: ${WHY[code]}${room}`;
+}
+
 // What a failure while the run made its files says, once abort() has taken
 // them away: a full disk in plain words, a file by the name it would have
 // in the out folder, not in the hidden folder, which goes with the run, and
@@ -587,9 +595,9 @@ function keep(state, earlierStuck, newStuck) {
 // is given as it is.
 function explain(state, err) {
   if (err.told) return err;
-  const full = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : fullDisk(err.stderr);
+  const code = ["ENOSPC", "EDQUOT"].includes(err.code) ? err.code : fullDisk(err.stderr);
   let said = err;
-  if (full) said = new Error(`Cannot write to ${state.dir}: ${WHY[full]}`);
+  if (code) said = new Error(full(state, code));
   else if (state.work && WHY[err.code] && typeof err.path === "string" && err.path.startsWith(state.work + path.sep)) said = new Error(`Cannot write to ${state.dir}: ${WHY[err.code]}`);
   else if (state.work && err.message.includes(state.work)) err.message = err.message.split(path.join(state.work, ".tmp") + path.sep).join(state.dir + path.sep).split(state.work + path.sep).join(state.dir + path.sep);
   if (state.left) said.message = `${said.message.replace(/\.$/, "")}. ${asWas(state)}.`;

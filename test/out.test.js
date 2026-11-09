@@ -52,7 +52,8 @@ test("a run that fails at its end leaves the earlier files as they were and adds
   // A longer fit, so every file would differ, whose last write fails.
   const run = cli([file, "--length", "14", "--voice", fixture("voice").file, "--out", out], { FFMPEG_PATH: path.join(FIXTURES, "failmix", "ffmpeg") });
   assert.equal(run.status, 1);
-  assert.match(run.stderr, new RegExp(`musicfit: Cannot write to ${quote(out)}: the disk is full\n$`));
+  // The earlier files took room too: they stay until the new ones are in place.
+  assert.match(run.stderr, new RegExp(`musicfit: Cannot write to ${quote(out)}: the disk is full\\. ${quote(ROOM)}\n$`));
   assert.deepEqual(snapshot(out), before);
   assert.deepEqual(fs.readdirSync(path.dirname(out)).filter((e) => e.startsWith(".musicfit-")), []);
 });
@@ -108,6 +109,9 @@ async function alive(pid) {
 }
 
 const quote = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// What a full disk says where an earlier run's files are.
+const ROOM = "The earlier files there stay until the new ones are in place, so the run needs room for both: free some space, or give another --out";
 
 test("a run stopped with SIGTERM or SIGINT while it writes leaves the earlier files as they were, and ends by that signal", posix, async () => {
   const out = goodFit("stopped");
@@ -359,6 +363,21 @@ test("the hidden folder is made only when the run writes its first file, and one
   }
   run.abort();
   assert.ok(!fs.existsSync(path.join(dir, "lazy")), "a folder made for the hidden one is still there");
+  // Where an earlier run's files are, a full disk says they took room too.
+  const earlier = goodFit("lazy-full");
+  const before = snapshot(earlier);
+  const again = out.begin(earlier);
+  try {
+    fs.mkdirSync = (at, ...rest) => {
+      if (path.basename(at).startsWith(".musicfit-part-")) throw Object.assign(new Error(`ENOSPC: no space left on device, mkdir '${at}'`), { code: "ENOSPC" });
+      return real(at, ...rest);
+    };
+    assert.throws(() => again.file("fitted.wav"), new RegExp(`^Error: Cannot write to ${quote(earlier)}: the disk is full\\. ${quote(ROOM)}$`));
+  } finally {
+    fs.mkdirSync = real;
+  }
+  again.abort();
+  assert.deepEqual(snapshot(earlier), before);
 });
 
 test("--analyze and a fit keep their own default folders, so reading a track never replaces its fit, nor the fit of a track whose name starts with Analysis", () => {
@@ -872,7 +891,7 @@ test("a file ffmpeg 4.4 could not finish as the disk filled, though it exits wit
   for (const name of ["video.mp4", ".0.m4a", "fitted.wav"]) {
     const run = cli(args, { FFMPEG_PATH: path.join(FIXTURES, "trailer44", "ffmpeg"), MUSICFIT_TEST_TRAILER: name });
     assert.equal(run.status, 1, `${name}: ${run.stderr}`);
-    assert.equal(run.stderr.split("\n").filter(Boolean).pop(), `musicfit: Cannot write to ${folder}: the disk is full`, name);
+    assert.equal(run.stderr.split("\n").filter(Boolean).pop(), `musicfit: Cannot write to ${folder}: the disk is full. ${ROOM}`, name);
     assert.deepEqual(snapshot(folder), before, name);
   }
   // A video.mp4 that cannot be read back is never put in place, whatever ffmpeg said.
@@ -1027,7 +1046,7 @@ test("a run whose hidden folder cannot be removed says so, when its commit fails
     Object.assign(fs, real);
   }
   assert.equal(left(plain).length, 1);
-  assert.equal(String(error), `Error: Cannot write to ${plain}: the disk is full. ${said(plain, left(plain)[0])}.`);
+  assert.equal(String(error), `Error: Cannot write to ${plain}: the disk is full. ${ROOM}. ${said(plain, left(plain)[0])}.`);
   fs.rmSync(path.join(plain, left(plain)[0]), { recursive: true });
   assert.deepEqual(snapshot(plain), before);
 });
