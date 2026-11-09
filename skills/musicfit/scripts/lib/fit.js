@@ -205,14 +205,15 @@ const KEEP_OVER = 3;
 const KEEP_MOST = 6;
 
 // The note for places keep set less than KEEP_OVER dB over the music: the
-// first few, each by its time and how it came out.
-function heldPlaces(name, held, count, lufs, duck) {
+// first few, each by its time and how it came out. With a voice --duck also
+// deepens the dip under the voice, so raising it is no advice.
+function heldPlaces(name, held, count, lufs, duck, voiced) {
   const said = held.slice(0, 4).map((p) => `${p.from.toFixed(2)} s (${p.over >= 0.05 ? `${num(p.over)} dB over it` : p.over > -0.05 ? "as loud as it" : `${num(-p.over)} dB under it`})`);
   if (held.length > 4) said.push(`${held.length - 4} more`);
   const list = said.length === 1 ? said[0] : `${said.slice(0, -1).join(", ")} and ${said[said.length - 1]}`;
   const where = held.length < count ? `in ${held.length} of the ${count} places it plays` : count === 1 ? "where it plays" : count === 2 ? "in both places it plays" : `in all ${count} places it plays`;
   const dips = duck > 0 ? `the music dips under it by ${num(duck)} dB at most, as --duck says` : "the music does not dip under it, as --duck is 0";
-  return `${name}'s own sound is less than ${KEEP_OVER} dB louder than the music ${where}, at ${list}: a place is set no louder than ${num(lufs + KEEP_MOST)} LUFS, ${KEEP_MOST} dB over the target, nor than keeps its true peaks, with the music's, under -1 dBTP, and ${dips}. A larger --duck lets the music dip further there.`;
+  return `${name}'s own sound is less than ${KEEP_OVER} dB louder than the music ${where}, at ${list}: a place is set no louder than ${num(lufs + KEEP_MOST)} LUFS, ${KEEP_MOST} dB over the target, nor than keeps its true peaks, with the music's, under -1 dBTP, and ${dips}.${voiced ? "" : " A larger --duck lets the music dip further there."}`;
 }
 
 // AAC can lift a true peak over the -1 dBTP the sound was held to, and by
@@ -388,24 +389,28 @@ async function make(track, options, run, video, writes) {
       });
     if (places) await addDipped(under, music, places);
     else await add(music);
-    if (spoken) await add(spoken);
-    spoken = null;
     // With keep the places and the music are held under the ceiling as they
     // are set, so the whole is set without the limiter, which would take
     // the music down around them; where the music dips under them it can
-    // read a little under the target.
-    if (places) await setLevel(under, options.lufs);
-    else await normalize(under, { lufs: options.lufs });
+    // read a little under the target. A voice stands at the ceiling by
+    // itself, so with one the sum passes it wherever a place meets the
+    // voice, and only the limiter can hold that without turning all the
+    // rest down.
+    const limited = !places || Boolean(spoken);
+    if (spoken) await add(spoken);
+    spoken = null;
+    if (limited) await normalize(under, { lufs: options.lufs });
+    else await setLevel(under, options.lufs);
     if (places) await cameOut(places, under, music);
     const m4a = run.scratch("sound.m4a");
-    const level = await aac(under, m4a, options.lufs, { limit: !places });
+    const level = await aac(under, m4a, options.lufs, { limit: limited });
     under = null;
     await mux(options.video, m4a, run.file("video.mp4"), { picture: picture.picture, comment: mark(version), start: picture.start });
     laid = { ...picture, sound: video.sound, same: video.same, duck: depth, over: places ? KEEP_OVER : null, spans: video.spans, places, loudness: level };
     // The places keep could not set KEEP_OVER dB over the music, said as
     // they came out.
     const held = (places || []).filter((p) => p.over !== null && Math.round(p.over * 10) / 10 < KEEP_OVER - 0.5);
-    if (held.length) options.warnings.push(heldPlaces(picture.name, held, places.length, options.lufs, options.duck));
+    if (held.length) options.warnings.push(heldPlaces(picture.name, held, places.length, options.lufs, options.duck, Boolean(options.voice)));
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
     // Short of the target: for its true peaks, when they are held under
     // -1 dBTP; else the note before gives them.

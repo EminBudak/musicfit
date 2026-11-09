@@ -137,13 +137,15 @@ npx musicfit@latest <track> --length <time> [options]
                     louder than keeps its true peaks, with the music's,
                     under -1 dBTP; where that leaves it less than 3 dB over
                     the music, the music dips under that place alone by as
-                    much, --duck at most), voice (speech: set to --lufs
-                    where it plays, and the music dips --duck under it) or
-                    drop (music of its own: left out). A faint room tone,
-                    or a voice with no speech found, is only turned down to
-                    --lufs if it is louder. Without it, a video with more
-                    than a faint room tone of its own is refused until you
-                    choose
+                    much, --duck at most. With --voice the places are set
+                    over the music as it dips under the voice, and where
+                    one meets the voice a limiter holds the two under
+                    -1 dBTP), voice (speech: set to --lufs where it plays,
+                    and the music dips --duck under it) or drop (music of
+                    its own: left out). A faint room tone, or a voice with
+                    no speech found, is only turned down to --lufs if it is
+                    louder. Without it, a video with more than a faint room
+                    tone of its own is refused until you choose
   --lufs <n>        loudness target in LUFS (default: -14)
   --end <kind>      auto, natural (the track's own ending) or fade (default: auto)
   --fade <s>        length of the closing fade, in whole beats (default: a bar)

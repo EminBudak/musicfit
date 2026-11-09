@@ -459,6 +459,117 @@ function windowEnergy(x, from, to) {
 }
 const lufsOf = (energy) => -0.691 + 10 * Math.log10(energy + 1e-12);
 
+test("--video-sound keep with a voice keeps every place, where the voice speaks over it too: measured in video.mp4 against a drop run each is there at about the target, and the music dips for none of them under the voice", async () => {
+  // The first burst before the voice starts, the other two while it speaks.
+  const fx = wav("fxvoice", 12, (x) => {
+    let seed = 17;
+    for (const [from, to] of [[0.6, 0.9], [3, 3.3], [8, 8.6]]) {
+      for (let i = Math.round(from * RATE); i < Math.round(to * RATE); i++) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        x[i] = (seed / 2147483648 - 0.5) * 0.6;
+      }
+    }
+  });
+  const video = film("fxvoice", { sound: fx });
+  const fit = (how) => {
+    const out = at(`fxvoice-${how}`);
+    const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--voice", speech(), "--video", video, "--video-sound", how, "--out", out]);
+    assert.equal(run.status, 0, run.stderr);
+    return { out, run };
+  };
+  const kept = fit("keep");
+  const dropped = fit("drop");
+  const c = cuesOf(kept.out);
+  assert.deepEqual(c.video.spans.map((s) => Math.round(s.from)), [1, 3, 8]);
+  const voiced = c.voice.spans;
+  const fitmd = fs.readFileSync(path.join(kept.out, "FIT.md"), "utf8");
+  for (const said of [kept.run.stdout, fitmd]) assert.doesNotMatch(said, /Infinity|NaN/);
+  assert.doesNotMatch(kept.run.stdout, /less than 3 dB louder/);
+  const k = weighted(mono(await decode(path.join(kept.out, "video.mp4"))));
+  const d = weighted(mono(await decode(path.join(dropped.out, "video.mp4"))));
+  for (const s of c.video.spans) {
+    const label = `the place at ${s.from} s: ${JSON.stringify(s)}`;
+    // Every figure is a number, and the place is over the music there.
+    assert.ok(Number.isFinite(s.over) && Number.isFinite(s.dip), label);
+    assert.ok(s.over >= 2.5, label);
+    // Where the voice speaks the music has dipped under it already.
+    if (voiced.some((v) => v.from <= s.from && s.to <= v.to)) assert.equal(s.dip, 0, label);
+    const [ek, ed] = [windowEnergy(k, s.from, s.to), windowEnergy(d, s.from, s.to)];
+    assert.ok(lufsOf(ek) >= lufsOf(ed) + 1, `${label}: ${lufsOf(ek).toFixed(1)} LUFS with keep and ${lufsOf(ed).toFixed(1)} with drop`);
+    // What keep adds to that stretch is the place, as a meter reads it.
+    const alone = lufsOf(ek - ed);
+    assert.ok(alone >= -19 && alone <= -9, `${label}: the place alone reads ${alone.toFixed(1)} LUFS`);
+  }
+  // Away from the places the music and the voice play as with drop.
+  for (const [from, to] of [[1.6, 2.6], [4.3, 6.4], [9.4, 11]]) {
+    const [lk, ld] = [lufsOf(windowEnergy(k, from, to)), lufsOf(windowEnergy(d, from, to))];
+    assert.ok(Math.abs(lk - ld) <= 1, `${from} to ${to} s: ${lk.toFixed(1)} LUFS with keep and ${ld.toFixed(1)} with drop`);
+  }
+  // The whole is at the target, its true peak held, by the limiter.
+  const whole = await measureFile(path.join(kept.out, "video.mp4"));
+  assert.ok(Math.abs(whole.integrated + 14) <= 0.5, `${whole.integrated} LUFS`);
+  assert.ok(whole.truePeak <= -1, `true peak ${whole.truePeak} dBTP`);
+  assert.deepEqual(c.warnings, []);
+});
+
+test("a place keep leaves short with a voice given is named without the advice of a larger --duck, which would deepen the dip under the voice too", () => {
+  const boom = wav("boom-voice", 12, (x) => {
+    for (let i = 0; i < 0.6 * RATE; i++) {
+      const t = i / RATE;
+      x[8 * RATE + i] = 0.3 * Math.exp(-t / 0.12) * Math.sin(2 * Math.PI * 70 * t);
+    }
+  });
+  const video = film("boom-voice", { sound: boom });
+  // A voice that has ended before the impact, so the music is at its full level there.
+  const early = at("early-speech.wav");
+  if (!fs.existsSync(early)) writeWav(early, voice(12, [[2, 5]]));
+  const out = at("boom-voice-keep");
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--voice", early, "--video", video, "--video-sound", "keep", "--duck", "2", "--out", out]);
+  assert.equal(run.status, 0, run.stderr);
+  const [span] = cuesOf(out).video.spans;
+  assert.ok(span.dip === 2 && span.over < 2.5, JSON.stringify(span));
+  assert.match(run.stdout, /Note {4}boom-voice\.mp4's own sound is less than 3 dB louder than the music where it plays, at 8\.00 s \([^)]*\): a place is set no louder than -8 LUFS, 6 dB over the target, nor than keeps its true peaks, with the music's, under -1 dBTP, and the music dips under it by 2 dB at most, as --duck says\.\n/);
+  assert.doesNotMatch(run.stdout, /A larger --duck/);
+});
+
+test("a voice at the ceiling holds no place of keep back, a place is never set to nothing, and one that came out with no figure counts as under the music", async () => {
+  const { setOver, cameOut } = require("../skills/musicfit/scripts/lib/render");
+  const n = 4 * RATE;
+  const fill = (f) => {
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) x[i] = f(i);
+    return { L: x, R: x.slice() };
+  };
+  let seed = 3;
+  const own = fill((i) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return i >= RATE && i < 1.4 * RATE ? (seed / 2147483648 - 0.5) * 0.4 : 0;
+  });
+  const music = fill((i) => 0.1 * Math.sin((2 * Math.PI * 110 * i) / RATE));
+  // A voice whose peaks stand at -1 dBFS in every millisecond of the place.
+  const also = fill((i) => 0.891 * Math.sign(Math.sin((2 * Math.PI * 200 * i) / RATE)));
+  const [place] = await setOver(own, music, [[1, 1.4]], { lufs: -14, over: 3, most: 6, duck: 10, also });
+  assert.ok(Number.isFinite(place.gain) && place.gain > -20, `its gain is ${place.gain} dB`);
+  assert.ok(Number.isFinite(place.over) && place.over >= 2.5, `it is ${place.over} dB over the music`);
+  assert.equal(place.dip, 0);
+  // The whole as make() adds it, read back: the place's samples are let go, and its figure is unchanged.
+  const whole = { L: own.L.slice(), R: own.R.slice() };
+  for (let i = 0; i < n; i++) {
+    whole.L[i] += music.L[i] + also.L[i];
+    whole.R[i] += music.R[i] + also.R[i];
+  }
+  const before = place.over;
+  await cameOut([place], whole, music);
+  assert.ok(Math.abs(place.over - before) <= 0.2, `set ${before} dB over the music, and read ${place.over} dB`);
+  assert.deepEqual(Object.keys(place).filter((key) => key === "own" || key === "also"), []);
+  // A figure that is no number is under the music, and null stays null.
+  const none = { a: 0, b: 100, over: -Infinity, dip: 10, own: { L: new Float32Array(100), R: new Float32Array(100) }, also: null };
+  const silent = { a: 0, b: 100, over: null, dip: 0, own: { L: new Float32Array(100), R: new Float32Array(100) }, also: null };
+  await cameOut([none, silent], whole, music);
+  assert.equal(none.over, -70);
+  assert.equal(silent.over, null);
+});
+
 test("a sound effect that runs to the end of a video a little longer than --length, within a frame, is kept like any other", async () => {
   const fx = wav("fxend", 12, (x) => {
     let seed = 13;

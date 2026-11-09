@@ -672,19 +672,22 @@ function dipAt(i, a, b) {
 // kept between the target and `most` dB over it, so a place where no music
 // plays is at the target, and one over the loudest music is not raised far
 // past it. A place is set no louder than keeps its true peaks, added to
-// the music's (and to `also`, a voice that plays too), under `ceiling`, so
-// the limiter that holds the whole takes nothing off the music. Where that
-// leaves a place less than `over` dB over the music, as a sharp sound or a
-// loud one on the drop can be, the music dips under that place alone by as
-// much as is missing, which also leaves the place's peaks more room, and
-// never by more than `duck` dB. A place can stay under the target, or less
-// than `over` dB over the music, when even that is not enough.
+// the music's, under `ceiling`, so the limiter that holds the whole takes
+// nothing off the music. Where that leaves a place less than `over` dB over
+// the music, as a sharp sound or a loud one on the drop can be, the music
+// dips under that place alone by as much as is missing, which also leaves
+// the place's peaks more room, and never by more than `duck` dB. A place can
+// stay under the target, or less than `over` dB over the music, when even
+// that is not enough. `also`, a voice that plays too, holds no place back:
+// the voice stands at the ceiling by itself, so counted here it would leave
+// a place no room at all, and `music` has dipped under it already. Where a
+// place meets the voice, the whole is held by the limiter (make() in fit.js).
 // The gain holds over each place and for up to 0.5 s after it, so its tail
 // keeps the same level, then turns to the next place's along an S-curve
 // that ends 10 ms before it. Returns each place with the gain it got, how
 // far the music dips under it (`dip`, in dB) and how far over the music it
 // was set (null where no music plays), and with its samples as they are
-// now, for cameOut().
+// now and the voice's there, for cameOut().
 async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1, also = null }) {
   const { L, R } = own;
   const n = L.length;
@@ -701,10 +704,10 @@ async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1
   });
   const ownReach = await reach(own);
   const musicReach = await reach(music);
-  const alsoReach = also ? await reach(also) : null;
   // The ceiling, or a tenth of a dB over the music's own highest peak when
-  // that reads over it, so the music is never held to less than it is and
-  // a faint sound added to that peak is not taken for one that passes it.
+  // that reads over it, so the music is never held to less than it is, a
+  // faint sound added to that peak is not taken for one that passes it, and
+  // a place always has some room.
   let loudest = 0;
   for (const side of [musicReach.up, musicReach.down]) for (const x of side) for (const v of x) if (v > loudest) loudest = v;
   const top = Math.max(10 ** (ceiling / 20), loudest * 10 ** (0.1 / 20));
@@ -738,8 +741,7 @@ async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1
             const o = ownReach[side][c][b];
             if (!(o > 0.01 * peak)) continue;
             // The music can end a frame before the picture does.
-            const left = top - g * (musicReach[side][c][b] || 0) - (alsoReach ? alsoReach[side][c][b] || 0 : 0);
-            best = Math.min(best, Math.max(0, left) / o);
+            best = Math.min(best, (top - g * (musicReach[side][c][b] || 0)) / o);
           }
         }
       }
@@ -768,7 +770,6 @@ async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1
     p.dip = dip;
     p.gain = gainAt(dip);
     p.over = heard && Number.isFinite(p.level) ? overAt(dip) : null;
-    if (!Number.isFinite(p.gain)) p.gain = -120;
   }
   let at = 0;
   for (let k = 0; k < places.length; k++) {
@@ -797,6 +798,7 @@ async function setOver(own, music, spans, { lufs, over, most, duck, ceiling = -1
   }
   for (const p of places) {
     p.own = { L: L.slice(p.a, p.b), R: R.slice(p.a, p.b) };
+    p.also = also ? { L: also.L.slice(p.a, p.b), R: also.R.slice(p.a, p.b) } : null;
     for (const key of ["turn", "reach", "level", "bed"]) delete p[key];
   }
   return places;
@@ -832,21 +834,29 @@ async function addDipped(into, music, places) {
   }
 }
 
+// How far under the music a place counts when it came out with no number
+// for it, in dB: as far as a meter reads.
+const UNHEARD = -70;
+
 // How far over the music each place of setOver() came out once the whole
 // was set to the target, and its peaks held if they had to be: the whole
 // split over the place into the music and the place's own sound by least
 // squares, as a meter can split them, and the place's `over` moved by the
 // difference in their gains, past the music's dip there, which `over`
-// counts already. Each place's samples are let go.
+// counts already. A voice that plays there is part of the whole and belongs
+// to neither, so what it can account for comes out of the sums first. Each
+// place's samples are let go. `over` stays null where no music plays, and
+// is a number everywhere else.
 async function cameOut(places, whole, music) {
   for (const p of places) {
-    const { own } = p;
+    const { own, also } = p;
     delete p.own;
+    delete p.also;
     if (p.over === null) continue;
-    const sums = { mm: 0, oo: 0, mo: 0, hm: 0, ho: 0 };
+    const sums = { mm: 0, oo: 0, mo: 0, hm: 0, ho: 0, vv: 0, mv: 0, ov: 0, hv: 0 };
     await blocks(0, own.L.length, (from, to) => {
-      let { mm, oo, mo, hm, ho } = sums;
-      for (const [o, m, h] of [[own.L, music.L, whole.L], [own.R, music.R, whole.R]]) {
+      let { mm, oo, mo, hm, ho, vv, mv, ov, hv } = sums;
+      for (const [o, m, h, v] of [[own.L, music.L, whole.L, also && also.L], [own.R, music.R, whole.R, also && also.R]]) {
         for (let i = from; i < to; i++) {
           const x = m[p.a + i] || 0;
           const y = h[p.a + i] || 0;
@@ -855,17 +865,34 @@ async function cameOut(places, whole, music) {
           mo += x * o[i];
           hm += y * x;
           ho += y * o[i];
+          if (v) {
+            const z = v[i] || 0;
+            vv += z * z;
+            mv += x * z;
+            ov += o[i] * z;
+            hv += y * z;
+          }
         }
       }
-      Object.assign(sums, { mm, oo, mo, hm, ho });
+      Object.assign(sums, { mm, oo, mo, hm, ho, vv, mv, ov, hv });
     });
-    const { mm, oo, mo, hm, ho } = sums;
+    let { mm, oo, mo, hm, ho } = sums;
+    const { vv, mv, ov, hv } = sums;
+    if (vv > 0) {
+      mm -= (mv * mv) / vv;
+      oo -= (ov * ov) / vv;
+      mo -= (mv * ov) / vv;
+      hm -= (hv * mv) / vv;
+      ho -= (hv * ov) / vv;
+    }
     // The two have to be told apart: not the same sound.
     const det = mm * oo - mo * mo;
-    if (!(det > 0.0001 * mm * oo)) continue;
-    const gm = (hm * oo - ho * mo) / det;
-    const go = (ho * mm - hm * mo) / det;
-    if (gm > 0 && go > 0) p.over += 20 * Math.log10(go / gm) - p.dip;
+    if (det > 0.0001 * mm * oo) {
+      const gm = (hm * oo - ho * mo) / det;
+      const go = (ho * mm - hm * mo) / det;
+      if (gm > 0 && go > 0) p.over += 20 * Math.log10(go / gm) - p.dip;
+    }
+    if (!Number.isFinite(p.over)) p.over = UNHEARD;
   }
 }
 
