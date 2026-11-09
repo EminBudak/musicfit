@@ -8,9 +8,9 @@
 // leaves the out folder as it was and adds nothing to it. A run that ends
 // well moves the earlier run's files aside, moves its own in, then removes
 // the earlier ones, so at no moment are both gone. The earlier run's files
-// are the ones its cues.json lists; a file under one of musicfit's names
-// that no musicfit cues.json there lists is someone else's, and stops a run
-// that would write over it before any work.
+// are the ones its cues.json lists, while they are as it wrote them; any
+// other file under one of musicfit's names is someone else's, and stops a
+// run that would write over it before any work.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -76,18 +76,22 @@ const isFile = (at) => {
   return Boolean(s) && !s.isDirectory();
 };
 
+// The musicfit cues.json in `dir`, or null.
+function cuesIn(dir) {
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(dir, "cues.json"), "utf8"));
+    return c && typeof c === "object" && c.musicfit ? c : null;
+  } catch {
+    return null;
+  }
+}
+
 // The files a musicfit run wrote in `dir`, as its cues.json lists them:
 // cues.json, seams.png and FIT.md always, fitted.wav for a fit, mix.wav
 // with a voice and video.mp4 with a video. None when no cues.json there is
 // musicfit's.
-function listed(dir) {
-  let c;
-  try {
-    c = JSON.parse(fs.readFileSync(path.join(dir, "cues.json"), "utf8"));
-  } catch {
-    return [];
-  }
-  if (!c || typeof c !== "object" || !c.musicfit) return [];
+function listed(dir, c = cuesIn(dir)) {
+  if (!c) return [];
   const names = ["cues.json", "seams.png", "FIT.md"];
   if (c.file === "fitted.wav") names.push("fitted.wav");
   if (c.mix === "mix.wav") names.push("mix.wav");
@@ -96,10 +100,40 @@ function listed(dir) {
 }
 
 // The earlier run's files in `dir`: those its cues.json lists that are
-// there as files or links. A folder under one of those names stays.
+// still as that run wrote them. cues.json gives the size in bytes of each
+// of the others under `sizes`, and video.mp4 has to carry musicfit's mark
+// too, so a cues.json copied next to someone else's files, or a file
+// changed since, never makes them musicfit's. FIT.md may have had its line
+// ends turned into CR LF, as git does on Windows. A cues.json with no
+// sizes, as musicfit 0.1 wrote it, is taken at its word for the names 0.1
+// wrote; 0.1 wrote no video.mp4. A folder or a link under one of those
+// names is not the earlier run's.
 function earlier(dir) {
-  const names = listed(dir);
-  return NAMES.filter((name) => names.includes(name) && isFile(path.join(dir, name)));
+  const c = cuesIn(dir);
+  const names = listed(dir, c);
+  const sizes = c && c.sizes && typeof c.sizes === "object" ? c.sizes : null;
+  const kept = (name) => {
+    const at = path.join(dir, name);
+    const s = lstat(at);
+    if (!s || !s.isFile()) return false;
+    if (name === "cues.json") return true;
+    if (!sizes) return name !== VIDEO;
+    if (name === "FIT.md" && s.size > sizes[name] && s.size < 1 << 20) return s.size - crlf(at) === sizes[name];
+    return s.size === sizes[name] && (name !== VIDEO || require("./video").marked(at));
+  };
+  return NAMES.filter((name) => names.includes(name) && kept(name));
+}
+
+// How many line ends of a text file are CR LF.
+function crlf(at) {
+  let n = 0;
+  try {
+    const bytes = fs.readFileSync(at);
+    for (let i = 1; i < bytes.length; i++) if (bytes[i] === 10 && bytes[i - 1] === 13) n++;
+  } catch {
+    // Read as none.
+  }
+  return n;
 }
 
 // Whether two paths name one file, however each is reached.
@@ -119,8 +153,8 @@ const and = (names) => (names.length === 1 ? names[0] : `${names.slice(0, -1).jo
 
 // Checked before any work, for the names this run writes and the files it
 // reads: the folder can be written, none of those names is a folder there
-// or a file musicfit did not write, and no input is a file this run
-// replaces or removes once it ends well.
+// or a file that is not the earlier run's as it wrote it, and no input is
+// a file this run replaces or removes once it ends well.
 function claim(dir, writes, inputs = []) {
   writable(dir);
   if (!fs.existsSync(dir)) return;
@@ -128,10 +162,12 @@ function claim(dir, writes, inputs = []) {
     const s = lstat(path.join(dir, name));
     if (s && s.isDirectory()) throw new Error(`${path.join(dir, name)} is a folder, and this run writes its ${name} there: move it, or give another --out`);
   }
-  const ours = listed(dir);
+  const ours = earlier(dir);
   const theirs = writes.filter((name) => isFile(path.join(dir, name)) && !ours.includes(name));
-  if (theirs.length === 1) throw new Error(`${path.join(dir, theirs[0])} is not a file musicfit wrote, and this run would replace it: move it, or give another --out`);
-  if (theirs.length) throw new Error(`${dir} holds ${and(theirs)}, which musicfit did not write, and this run would replace them: move them, or give another --out`);
+  // A file the cues.json there lists that is not as that run wrote it.
+  const changed = theirs.some((name) => listed(dir).includes(name));
+  if (theirs.length === 1) throw new Error(`${path.join(dir, theirs[0])} is not ${changed ? `the ${theirs[0]} musicfit wrote there` : "a file musicfit wrote"}, and this run would replace it: move it, or give another --out`);
+  if (theirs.length) throw new Error(`${dir} holds ${and(theirs)}, which ${changed ? "are not the files musicfit wrote there" : "musicfit did not write"}, and this run would replace them: move them, or give another --out`);
   for (const input of inputs.filter(Boolean)) {
     for (const name of earlier(dir)) {
       const at = path.join(dir, name);

@@ -264,9 +264,9 @@ async function make(track, options, run, video) {
 
   if (options.analyze) {
     const c = analysisCues({ version, track: trackName, analysis: a, options });
-    fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
     fs.writeFileSync(run.file("FIT.md"), analysisMarkdown(c, { trackName }));
     fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
+    writeCues(run, c);
     return { cues: c, analysis: a };
   }
 
@@ -373,10 +373,19 @@ async function make(track, options, run, video) {
 
   await encodeWav(music, run.file("fitted.wav"));
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice, video: laid });
-  fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
   fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName }));
   fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
+  writeCues(run, c);
   return { cues: c, analysis: a, plan: p };
+}
+
+// cues.json, written last: with the size in bytes of each file the run
+// wrote beside it, so a later run knows them for this run's only while
+// they are as it wrote them (see earlier() in out.js).
+function writeCues(run, c) {
+  c.sizes = {};
+  for (const name of [c.file, c.mix, c.video && c.video.file, "seams.png", "FIT.md"].filter(Boolean)) c.sizes[name] = fs.statSync(run.file(name)).size;
+  fs.writeFileSync(run.file("cues.json"), JSON.stringify(c, null, 2) + "\n");
 }
 
 module.exports = { fit, files, slug, outDir };

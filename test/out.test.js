@@ -521,6 +521,83 @@ test("a file under one of musicfit's names that no musicfit cues.json there list
   assert.equal(fs.readFileSync(path.join(folder, "mix.wav"), "utf8"), "my mix\n");
 });
 
+// A fit with a voice and a video of no sound of its own: every file a run
+// can write.
+function videoFit(name) {
+  const film = path.join(dir, `${name}-film.mp4`);
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const folder = outDir(name);
+  const run = cli([fixture("house").file, "--length", "12", "--hit", "8", "--voice", fixture("voice").file, "--video", film, "--out", folder]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
+  return { folder, film };
+}
+
+test("cues.json gives the size of each file the run wrote beside it", () => {
+  const { folder } = videoFit("sizes");
+  const sizes = (at) => JSON.parse(fs.readFileSync(path.join(at, "cues.json"), "utf8")).sizes;
+  assert.deepEqual(Object.keys(sizes(folder)).sort(), ["FIT.md", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
+  for (const [name, size] of Object.entries(sizes(folder))) assert.equal(size, fs.statSync(path.join(folder, name)).size, name);
+  const read = outDir("sizes-analysis");
+  const run = cli([fixture("house").file, "--analyze", "--out", read, "--json"]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout).sizes, sizes(read));
+  assert.deepEqual(Object.keys(sizes(read)).sort(), ["FIT.md", "seams.png"]);
+  for (const [name, size] of Object.entries(sizes(read))) assert.equal(size, fs.statSync(path.join(read, name)).size, name);
+});
+
+test("a file counts as the earlier run's only while it is as that run wrote it, so a copied cues.json never makes the user's files musicfit's", () => {
+  const { file } = fixture("house");
+  const { folder: made, film } = videoFit("copied-from");
+  // cues.json copied into a project folder that holds the user's own film
+  // and mix under musicfit's names, as for a Remotion edit.
+  const project = outDir("copied-into");
+  fs.mkdirSync(project);
+  fs.copyFileSync(path.join(made, "cues.json"), path.join(project, "cues.json"));
+  fs.copyFileSync(film, path.join(project, "video.mp4"));
+  fs.writeFileSync(path.join(project, "mix.wav"), "my own mix\n");
+  const before = snapshot(project);
+  const both = cli([file, "--length", "12", "--voice", fixture("voice").file, "--video", film, "--out", project]);
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, new RegExp(`musicfit: ${quote(project)} holds mix\\.wav and video\\.mp4, which are not the files musicfit wrote there, and this run would replace them: move them, or give another --out\n`));
+  assert.doesNotMatch(both.stderr, /Reading/);
+  assert.deepEqual(snapshot(project), before);
+  // A fit that writes neither leaves them as they are.
+  const plain = cli([file, "--length", "12", "--out", project]);
+  assert.equal(plain.status, 0, plain.stderr);
+  const after = snapshot(project);
+  assert.deepEqual([after["video.mp4"], after["mix.wav"]], [before["video.mp4"], before["mix.wav"]]);
+  assert.deepEqual(Object.keys(after).sort(), ["FIT.md", "cues.json", "fitted.wav", "mix.wav", "seams.png", "video.mp4"]);
+
+  // A FIT.md changed since musicfit wrote it is the user's now; one whose
+  // line ends git turned into CR LF is still musicfit's.
+  const notes = path.join(project, "FIT.md");
+  const written = fs.readFileSync(notes, "utf8");
+  fs.writeFileSync(notes, `${written}\nMy notes on the cut.\n`);
+  const edited = cli([file, "--length", "12", "--out", project]);
+  assert.equal(edited.status, 1);
+  assert.match(edited.stderr, new RegExp(`musicfit: ${quote(notes)} is not the FIT\\.md musicfit wrote there, and this run would replace it: move it, or give another --out\n`));
+  fs.writeFileSync(notes, written.replace(/\n/g, "\r\n"));
+  const crlf = cli([file, "--length", "12", "--out", project]);
+  assert.equal(crlf.status, 0, crlf.stderr);
+
+  // A video.mp4 of the size cues.json gives but without musicfit's mark is
+  // not musicfit's either: a fit without --video leaves it, and removes the
+  // earlier mix.wav, which is musicfit's.
+  const unmarked = outDir("unmarked");
+  fs.cpSync(made, unmarked, { recursive: true });
+  const video = fs.readFileSync(path.join(unmarked, "video.mp4"));
+  const at = video.indexOf("a fitted track laid under this picture");
+  assert.ok(at > 0, "video.mp4 has no mark");
+  video.write("A", at);
+  fs.writeFileSync(path.join(unmarked, "video.mp4"), video);
+  const fit = cli([file, "--length", "12", "--out", unmarked]);
+  assert.equal(fit.status, 0, fit.stderr);
+  assert.deepEqual(fs.readdirSync(unmarked).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png", "video.mp4"]);
+  assert.ok(fs.readFileSync(path.join(unmarked, "video.mp4")).equals(video));
+});
+
 test("an input that is a file the run replaces or removes once it ends well is refused before any work", () => {
   const { file } = fixture("house");
   const folder = goodFit("inputs-inside");
