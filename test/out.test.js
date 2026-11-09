@@ -1519,3 +1519,140 @@ test("the earlier files a run says it removes are read after the takeover of a r
   assert.deepEqual(out.listed(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).run, "new");
 });
+
+// The lock of a run killed as it moved its files in, as cutShort() leaves it.
+const killedLock = (pid) => `${require("node:os").hostname()} ${pid}\n`;
+
+test("a .old that is a link is no folder of earlier files: nothing comes back through it", posix, async () => {
+  const folder = goodFit("old-link");
+  const elsewhere = path.join(dir, "old-link-elsewhere");
+  fs.mkdirSync(elsewhere);
+  fs.writeFileSync(path.join(elsewhere, "mix.wav"), "not an earlier file\n");
+  fs.rmSync(path.join(folder, "mix.wav"));
+  const dead = deadPid();
+  const work = path.join(folder, `.musicfit-part-${dead}-0badc0de`);
+  fs.mkdirSync(work);
+  await out.record({ file: (name) => { fs.writeFileSync(path.join(work, name), `killed run's ${name}\n`); return path.join(work, name); } }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
+  fs.symlinkSync(elsewhere, path.join(work, ".old"));
+  fs.writeFileSync(path.join(folder, out.LOCK), killedLock(dead));
+  out.claim(folder, ["fitted.wav", "cues.json", "seams.png", "FIT.md"]);
+  assert.ok(!fs.existsSync(path.join(folder, "mix.wav")), "a file came through the link");
+  assert.equal(fs.readFileSync(path.join(elsewhere, "mix.wav"), "utf8"), "not an earlier file\n");
+});
+
+test("a killed run's hidden folder that has become a link by the time the next run puts things back is never followed", posix, () => {
+  const folder = goodFit("work-link");
+  const before = snapshot(folder);
+  const elsewhere = path.join(dir, "work-link-elsewhere");
+  fs.mkdirSync(elsewhere);
+  // A cues.json that vouches for the out folder's files, there through the link.
+  fs.copyFileSync(path.join(folder, "cues.json"), path.join(elsewhere, "cues.json"));
+  const dead = deadPid();
+  const work = path.join(folder, `.musicfit-part-${dead}-0badc0de`);
+  fs.mkdirSync(work);
+  fs.copyFileSync(path.join(folder, "cues.json"), path.join(work, "cues.json"));
+  const lock = path.join(folder, out.LOCK);
+  fs.writeFileSync(lock, killedLock(dead));
+  const real = fs.openSync;
+  try {
+    // Once the folder has been found, as the lock is taken for the takeover.
+    fs.openSync = (at, flags, ...rest) => {
+      if (at === lock && flags === "wx") {
+        fs.rmSync(work, { recursive: true });
+        fs.symlinkSync(elsewhere, work);
+      }
+      return real(at, flags, ...rest);
+    };
+    out.claim(folder, ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"]);
+  } finally {
+    fs.openSync = real;
+  }
+  fs.unlinkSync(work);
+  assert.deepEqual(snapshot(folder), before);
+  assert.deepEqual(fs.readdirSync(elsewhere), ["cues.json"]);
+});
+
+test("a file that came, while the run worked, at a name the run writes stays, and the run fails and says so", async () => {
+  const folder = outDir("came-meanwhile");
+  fs.mkdirSync(folder);
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  await out.record(run, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
+  fs.writeFileSync(path.join(folder, "FIT.md"), "the user's notes\n");
+  await assert.rejects(run.commit(), new RegExp(`^Error: Could not put the new files in ${quote(folder)}: ${quote(path.join(folder, "FIT.md"))}: a file came there while the run worked\\. ${quote(folder)} is as it was\\.$`));
+  run.abort();
+  assert.equal(fs.readFileSync(path.join(folder, "FIT.md"), "utf8"), "the user's notes\n");
+  assert.deepEqual(fs.readdirSync(folder), ["FIT.md"]);
+});
+
+test("an earlier file whose place was taken when the next run puts things back stays in the hidden folder, and the file in its place stays too", async () => {
+  const folder = goodFit("place-taken");
+  const earlier = fs.readFileSync(path.join(folder, "fitted.wav"));
+  const work = await cutShort(folder);
+  // The killed run's new fitted.wav has gone, and the user has put another there.
+  fs.rmSync(path.join(folder, "fitted.wav"));
+  fs.writeFileSync(path.join(folder, "fitted.wav"), "the user's own\n");
+  out.claim(folder, ["seams.png", "FIT.md"]);
+  assert.equal(fs.readFileSync(path.join(folder, "fitted.wav"), "utf8"), "the user's own\n");
+  assert.ok(fs.readFileSync(path.join(work, ".old", "fitted.wav")).equals(earlier), "the earlier fitted.wav is not in the hidden folder");
+  // cues.json had its place free.
+  assert.ok(out.listed(folder).includes("cues.json"));
+  assert.ok(!fs.existsSync(path.join(work, ".old", "cues.json")));
+});
+
+test("a lock found stale is looked at again before it is taken away, so one another run has made since then stays", () => {
+  const folder = goodFit("lock-looked-again");
+  const lock = path.join(folder, out.LOCK);
+  fs.writeFileSync(lock, killedLock(deadPid()));
+  const live = killedLock(process.pid);
+  const real = fs.openSync;
+  let looks = 0;
+  try {
+    // Another run takes over the stale lock, and makes its own, between the
+    // first look at it and the second.
+    fs.openSync = (at, ...rest) => {
+      if (at === lock && ++looks === 2) fs.writeFileSync(lock, live);
+      return real(at, ...rest);
+    };
+    out.claim(folder, ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"]);
+  } finally {
+    fs.openSync = real;
+  }
+  assert.ok(looks >= 2, "the lock was looked at once");
+  assert.equal(fs.readFileSync(lock, "utf8"), live);
+});
+
+test("a lock held far longer than any commit takes is taken over, though the process it names still runs", { timeout: 30000 }, async () => {
+  const folder = goodFit("lock-too-old");
+  const lock = path.join(folder, out.LOCK);
+  fs.writeFileSync(lock, killedLock(process.pid));
+  const then = new Date(Date.now() - 70000);
+  fs.utimesSync(lock, then, then);
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  const started = Date.now();
+  await run.commit();
+  assert.ok(Date.now() - started < 5000, `the commit waited ${Date.now() - started} ms`);
+  assert.ok(!fs.existsSync(lock));
+  assert.equal(fs.readFileSync(path.join(folder, "FIT.md"), "utf8"), "new FIT.md\n");
+});
+
+test("a file and a link named like a dead run's old hidden folder are not its hidden folder, and sweep() leaves them alone", posix, () => {
+  const folder = outDir("sweep-names");
+  fs.mkdirSync(folder);
+  const dead = deadPid();
+  const then = new Date(Date.now() - 20 * 60000);
+  const file = path.join(folder, `.musicfit-part-${dead}-aaaaaaaa`);
+  fs.writeFileSync(file, "the user's\n");
+  fs.utimesSync(file, then, then);
+  const elsewhere = path.join(dir, "sweep-names-elsewhere");
+  fs.mkdirSync(elsewhere);
+  fs.writeFileSync(path.join(elsewhere, "keep.txt"), "kept\n");
+  const link = path.join(folder, `.musicfit-part-${dead}-bbbbbbbb`);
+  fs.symlinkSync(elsewhere, link);
+  fs.lutimesSync(link, then, then);
+  out.sweep(folder);
+  assert.equal(fs.readFileSync(file, "utf8"), "the user's\n");
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), "the link went");
+  assert.deepEqual(fs.readdirSync(elsewhere), ["keep.txt"]);
+});
