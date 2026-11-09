@@ -1364,6 +1364,24 @@ test("the hidden folder of a run killed as it moved its files in waits for the n
   assert.deepEqual(snapshot(folder), before);
 });
 
+test("a commit that waits on a lock a run killed as it moved its files in has left puts the earlier files back, then ends well with only its own files there", async () => {
+  const folder = goodFit("cut-short-commit");
+  const earlierCues = fs.readFileSync(path.join(folder, "cues.json"), "utf8");
+  const run = out.begin(folder);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
+  await out.record(run, { musicfit: "test", file: "fitted.wav", mix: null, video: null, run: "new" });
+  // The lock goes stale only now, while this run waits for its turn.
+  const work = await cutShort(folder);
+  await run.commit();
+  assert.ok(!fs.existsSync(work), "the killed run's hidden folder is still there");
+  assert.ok(!fs.existsSync(path.join(folder, out.LOCK)), "the lock is still there");
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) assert.equal(fs.readFileSync(path.join(folder, name), "utf8"), `new ${name}\n`);
+  const c = JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8"));
+  assert.equal(c.run, "new");
+  assert.notEqual(earlierCues, fs.readFileSync(path.join(folder, "cues.json"), "utf8"));
+});
+
 test("a link named like a killed run's hidden folder, next to its lock, is never followed: no file of the out folder goes through it", posix, () => {
   const folder = goodFit("half-done-link");
   const elsewhere = path.join(dir, "half-done-elsewhere");
