@@ -341,9 +341,16 @@ function claim(dir, writes, inputs = []) {
   const ours = earlier(dir);
   const theirs = writes.filter((name) => isFile(path.join(dir, name)) && !ours.includes(name));
   // A file the cues.json there lists that is not as that run wrote it.
-  const changed = theirs.some((name) => listed(dir).includes(name));
-  if (theirs.length === 1) throw new Error(`${path.join(dir, theirs[0])} is not ${changed ? `the ${theirs[0]} musicfit wrote there` : "a file musicfit wrote"}, and this run would replace it: move it, or give another --out`);
-  if (theirs.length) throw new Error(`${dir} holds ${and(theirs)}, which ${changed ? "are not the files musicfit wrote there" : "musicfit did not write"}, and this run would replace them: move them, or give another --out`);
+  const list = listed(dir);
+  const changed = theirs.some((name) => list.includes(name));
+  // A cues.json changed by hand vouches for nothing, and moved alone it
+  // leaves the files it lists with no record: they go with it.
+  if (theirs.includes("cues.json") && list.includes("cues.json")) {
+    const beside = NAMES.filter((name) => name !== "cues.json" && list.includes(name) && isFile(path.join(dir, name)));
+    if (beside.length) throw new Error(`${path.join(dir, "cues.json")} was changed since musicfit wrote it, so this run cannot vouch for ${and(beside)} beside it: move them with it, or give another --out`);
+  }
+  if (theirs.length === 1) throw new Error(`${path.join(dir, theirs[0])} is ${changed ? `not the ${theirs[0]} musicfit wrote there` : "a file no musicfit cues.json there lists"}, and this run would replace it: move it, or give another --out`);
+  if (theirs.length) throw new Error(`${dir} holds ${and(theirs)}, which ${changed ? "are not the files musicfit wrote there" : "no musicfit cues.json there lists"}, and this run would replace them: move them, or give another --out`);
   for (const input of inputs.filter(Boolean)) {
     for (const name of earlier(dir)) {
       const at = path.join(dir, name);

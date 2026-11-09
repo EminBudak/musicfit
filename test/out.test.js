@@ -555,12 +555,12 @@ test("a file under one of musicfit's names that no musicfit cues.json there list
   fs.writeFileSync(path.join(folder, "FIT.md"), "my own notes\n");
   const both = cli([file, "--length", "12", "--out", folder]);
   assert.equal(both.status, 1);
-  assert.match(both.stderr, new RegExp(`musicfit: ${quote(folder)} holds cues\\.json and FIT\\.md, which musicfit did not write, and this run would replace them: move them, or give another --out\n`));
+  assert.match(both.stderr, new RegExp(`musicfit: ${quote(folder)} holds cues\\.json and FIT\\.md, which no musicfit cues\\.json there lists, and this run would replace them: move them, or give another --out\n`));
   assert.doesNotMatch(both.stderr, /Reading/);
   fs.rmSync(path.join(folder, "cues.json"));
   const one = cli([file, "--length", "12", "--out", folder]);
   assert.equal(one.status, 1);
-  assert.match(one.stderr, new RegExp(`musicfit: ${quote(path.join(folder, "FIT.md"))} is not a file musicfit wrote, and this run would replace it: move it, or give another --out\n`));
+  assert.match(one.stderr, new RegExp(`musicfit: ${quote(path.join(folder, "FIT.md"))} is a file no musicfit cues\\.json there lists, and this run would replace it: move it, or give another --out\n`));
   assert.equal(fs.readFileSync(path.join(folder, "FIT.md"), "utf8"), "my own notes\n");
   // A mix.wav of the user's, which a run without a voice does not write, stays.
   fs.rmSync(path.join(folder, "FIT.md"));
@@ -656,11 +656,20 @@ test("a file changed since the run wrote it is the user's, though it kept its si
   fs.writeFileSync(fitted, quieter);
   refused("fitted.wav");
   fs.writeFileSync(fitted, bytes);
-  // A cue changed by hand.
+  // A cue changed by hand: this run cannot vouch for what it lists, so the
+  // refusal names them all, and then moving only cues.json is not the way.
   const cuesFile = path.join(folder, "cues.json");
   const text = fs.readFileSync(cuesFile, "utf8");
   fs.writeFileSync(cuesFile, text.replace(/"bpm": (\d+)/, (_, bpm) => `"bpm": ${Number(bpm) + 1}`));
-  refused("cues.json");
+  const refusedAll = cli([file, "--length", "12", "--voice", fixture("voice").file, "--out", folder]);
+  assert.equal(refusedAll.status, 1, refusedAll.stderr);
+  assert.match(refusedAll.stderr, new RegExp(`musicfit: ${quote(cuesFile)} was changed since musicfit wrote it, so this run cannot vouch for fitted\\.wav, mix\\.wav, seams\\.png and FIT\\.md beside it: move them with it, or give another --out\n$`));
+  assert.doesNotMatch(refusedAll.stderr, /Reading/);
+  fs.renameSync(cuesFile, `${cuesFile}.moved`);
+  const noRecord = cli([file, "--length", "12", "--voice", fixture("voice").file, "--out", folder]);
+  assert.equal(noRecord.status, 1, noRecord.stderr);
+  assert.match(noRecord.stderr, new RegExp(`musicfit: ${quote(folder)} holds fitted\\.wav, mix\\.wav, seams\\.png and FIT\\.md, which no musicfit cues\\.json there lists, and this run would replace them: move them, or give another --out\n$`));
+  fs.renameSync(`${cuesFile}.moved`, cuesFile);
   // The same text with CR LF line ends, as git can leave it, is still musicfit's.
   fs.writeFileSync(cuesFile, text.replace(/\n/g, "\r\n"));
   const run = cli([file, "--length", "12", "--voice", fixture("voice").file, "--out", folder]);
@@ -1216,7 +1225,7 @@ test("a cues.json, a lock or the cues.json beside a video that is a pipe or a li
   mkfifo(path.join(piped, "cues.json"));
   const run = await bounded([file, "--length", "12", "--out", piped]);
   assert.equal(run.code, 1, `${run.signal} ${run.stderr}`);
-  assert.match(run.stderr, new RegExp(`musicfit: ${quote(path.join(piped, "cues.json"))} is not a file musicfit wrote, and this run would replace it: move it, or give another --out\n$`));
+  assert.match(run.stderr, new RegExp(`musicfit: ${quote(path.join(piped, "cues.json"))} is a file no musicfit cues\\.json there lists, and this run would replace it: move it, or give another --out\n$`));
   // So is a link to one, or to another fit's cues.json, which vouches for
   // nothing here: the user's fitted.wav stays.
   const linked = outDir("linked-cues");
@@ -1232,7 +1241,7 @@ test("a cues.json, a lock or the cues.json beside a video that is a pipe or a li
   const before = snapshot(vouched);
   const mine = await bounded([file, "--length", "12", "--out", vouched]);
   assert.equal(mine.code, 1, mine.stderr);
-  assert.match(mine.stderr, /holds fitted\.wav and cues\.json, which musicfit did not write/);
+  assert.match(mine.stderr, /holds fitted\.wav and cues\.json, which no musicfit cues\.json there lists/);
   assert.deepEqual(snapshot(vouched), before);
 
   // A pipe under the lock's name makes the commit fail at once.

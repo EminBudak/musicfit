@@ -855,7 +855,7 @@ test("a video.mp4 musicfit did not write is refused, a run without --video leave
   fs.writeFileSync(path.join(out, "video.mp4"), "their video\n");
   const refused = cli([fixture("house").file, "--length", "12", "--video", film("mute"), "--out", out]);
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /musicfit: .*theirs\/video\.mp4 is not a file musicfit wrote, and this run would replace it: move it, or give another --out\n$/);
+  assert.match(refused.stderr, /musicfit: .*theirs\/video\.mp4 is a file no musicfit cues\.json there lists, and this run would replace it: move it, or give another --out\n$/);
   assert.doesNotMatch(refused.stderr, /Reading/);
   const plainRun = cli([fixture("house").file, "--length", "12", "--out", out]);
   assert.equal(plainRun.status, 0, plainRun.stderr);
