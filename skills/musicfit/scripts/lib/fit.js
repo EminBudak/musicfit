@@ -273,7 +273,7 @@ function removedNote(names, dir) {
 async function make(track, options, run, video, writes) {
   // Looked at once the work is done, just before the reports are written.
   const removes = () => {
-    const gone = run.earlier().filter((name) => !writes.includes(name));
+    const gone = run.removes(writes);
     if (gone.length) options.warnings.push(removedNote(gone, run.dir));
   };
   const log = options.log || (() => {});

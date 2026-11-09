@@ -419,9 +419,10 @@ let hooked = false;
 
 // begin(dir): a run that writes in `dir`. file(name) is where it writes an
 // output, scratch(name) where it keeps what is not one; the hidden folder
-// both are in is made by the first of them. earlier() names the earlier
-// run's files in `dir` as they are now, commit() puts the outputs in place
-// and removes those, abort() leaves no trace.
+// both are in is made by the first of them. removes(writes) names the
+// earlier run's files in `dir` that a run writing `writes` does not make
+// again, for its reports to say, and those are the ones it removes: commit()
+// puts the outputs in place and removes them, abort() leaves no trace.
 function begin(dir) {
   const state = {
     dir,
@@ -429,9 +430,10 @@ function begin(dir) {
     work: null,
     made: [],
     ended: false,
+    removing: null,
     file: (name) => path.join(open(state), name),
     scratch: (name) => path.join(open(state), ".tmp", name),
-    earlier: () => earlier(state.target),
+    removes: (writes) => (state.removing = earlier(state.target).filter((name) => !writes.includes(name))),
     commit: () => commit(state),
     abort: () => abort(state),
     explain: (err) => explain(state, err),
@@ -720,11 +722,13 @@ function identity(at) {
 // back to the hidden folder, or is removed when it cannot go, and an
 // earlier file goes back to its place when that is free. An earlier file
 // that cannot go back waits in a folder no later run removes, and the
-// message says where each file is.
+// message says where each file is. Of the earlier files only those this run
+// writes again, or said it removes, are moved: a file another run has added
+// since the reports were written is no file of this run's to remove.
 function swap(state) {
   const { target, work } = state;
   const fresh = NAMES.filter((name) => fs.existsSync(path.join(work, name)));
-  const before = earlier(target);
+  const before = earlier(target).filter((name) => fresh.includes(name) || !state.removing || state.removing.includes(name));
   const old = path.join(work, ".old");
   fs.mkdirSync(old, { recursive: true });
   const moved = [];

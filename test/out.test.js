@@ -343,6 +343,26 @@ test("two runs that put their files in one folder at the same moment take turns,
   assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
 });
 
+test("a file another run adds while this one writes its reports stays when this run ends well, as no note of this run names it", async () => {
+  const folder = outDir("note-race");
+  fs.mkdirSync(folder);
+  const writes = ["fitted.wav", "cues.json", "seams.png", "FIT.md"];
+  const a = out.begin(folder);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md", "video.mp4"]) fs.writeFileSync(a.file(name), `A ${name}\n`);
+  await out.record(a, { musicfit: "test", file: "fitted.wav", mix: null, video: { file: "video.mp4" } });
+  // B looks at the folder for its note, then A ends well there.
+  const b = out.begin(folder);
+  assert.deepEqual(b.removes(writes), []);
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(b.file(name), `B ${name}\n`);
+  await out.record(b, { musicfit: "test", file: "fitted.wav", mix: null, video: null, run: "B" });
+  await a.commit();
+  await b.commit();
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png", "video.mp4"]);
+  assert.equal(fs.readFileSync(path.join(folder, "video.mp4"), "utf8"), "A video.mp4\n");
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) assert.equal(fs.readFileSync(path.join(folder, name), "utf8"), `B ${name}\n`);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).run, "B");
+});
+
 test("the lock a run killed while it moved its files left is taken over", async () => {
   const folder = goodFit("stale-lock");
   fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${deadPid()}\n`);
