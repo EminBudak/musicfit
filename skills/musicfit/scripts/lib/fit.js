@@ -14,7 +14,7 @@ const { RATE: ANALYSIS_RATE } = require("./analyze");
 const { analyzeInThread } = require("./thread");
 const { plan } = require("./plan");
 const { assemble, speech, BLIP, floorOf, duck, normalize, setOver, addDipped, cameOut, setWhere, scale, attackNear } = require("./render");
-const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown } = require("./report");
+const { cues: makeCues, analysisCues, fitMarkdown, analysisMarkdown, heldAtCeiling } = require("./report");
 const { seamsPng } = require("./draw");
 const { claim, begin, sameFile, cuesAt, record } = require("./out");
 const { blocks } = require("./breathe");
@@ -225,25 +225,30 @@ function heldPlaces(name, held, count, lufs, duck, voiced) {
 // limiting, so the ceiling is lowered no further. Of the encodings that
 // kept their loudness, the one with the lowest true peak is kept, as
 // `file`. Returns its measurement.
+//
+// Without the limiter (keep) the whole is turned down instead, which costs
+// loudness: by what the first encoding was over, then by a little more each
+// round, as the next encoding can land anywhere. Going by the last encoding
+// alone, a peak the encoder lifted by chance took 3 LU off a fit whose first
+// encoding was 0.3 dB over. So this costs what the first encoding was over
+// and half a LU more at most, and the first encoding at -1 dBTP or under is
+// kept, else the first of all, which a note says is over.
+const NUDGE = 0.2;
 async function aac(sound, file, lufs, { limit = true } = {}) {
   let ceiling = -1;
-  let over = 0;
   let best = null;
   let first = null;
   for (let round = 0; round < 4; round++) {
-    // Without the limiter (keep), the whole is turned down by as much
-    // instead, which takes it further from the target.
     if (round && limit) await normalize(sound, { lufs, peak: ceiling });
-    else if (round) await scale(sound, 10 ** (-over / 20));
+    else if (round) await scale(sound, 10 ** (-(round === 1 ? first.truePeak + 1 + 0.1 : NUDGE) / 20));
     const at = `${file}.${round}.m4a`;
     await encodeAac(sound, at);
     const m = await measureFile(at);
     first = first || m;
     const kept = !limit || !(m.integrated < first.integrated - 0.5);
-    if (!best || (kept && m.truePeak < best.m.truePeak)) best = { at, m };
+    if (!best || (limit ? kept && m.truePeak < best.m.truePeak : m.truePeak <= -1)) best = { at, m };
     if (!kept || !(m.truePeak > -1)) break;
-    over = m.truePeak + 1 + 0.1;
-    ceiling -= over;
+    ceiling -= m.truePeak + 1 + 0.1;
   }
   fs.renameSync(best.at, file);
   return best.m;
@@ -412,9 +417,9 @@ async function make(track, options, run, video, writes) {
     const held = (places || []).filter((p) => p.over !== null && Math.round(p.over * 10) / 10 < KEEP_OVER - 0.5);
     if (held.length) options.warnings.push(heldPlaces(picture.name, held, places.length, options.lufs, options.duck, Boolean(options.voice)));
     if (level.truePeak > -1) options.warnings.push(`After the AAC encoding the true peak of video.mp4 is ${level.truePeak.toFixed(1)} dBTP, over -1 dBTP.`);
-    // Short of the target: for its true peaks, when they are held under
-    // -1 dBTP; else the note before gives them.
-    if (Number.isFinite(level.integrated) && level.integrated < options.lufs - 0.5) options.warnings.push(`video.mp4 is at ${level.integrated.toFixed(1)} LUFS after the AAC encoding, short of the ${options.lufs} LUFS asked for${level.truePeak <= -1 ? ": any louder and its true peaks would pass -1 dBTP" : ""}.`);
+    // Short of the target: for its true peaks only when they stand at
+    // -1 dBTP or just under it; else both numbers, and no reason.
+    if (Number.isFinite(level.integrated) && level.integrated < options.lufs - 0.5) options.warnings.push(`video.mp4 is at ${level.integrated.toFixed(1)} LUFS after the AAC encoding, short of the ${options.lufs} LUFS asked for${heldAtCeiling(level.truePeak) ? ": any louder and its true peaks would pass -1 dBTP" : `, with true peaks at ${level.truePeak.toFixed(1)} dBTP`}.`);
   }
 
   await encodeWav(music, run.file("fitted.wav"));

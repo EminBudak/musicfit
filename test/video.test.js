@@ -1063,10 +1063,57 @@ test("a video.mp4 that stopped short of the loudness asked for says so, in the s
   const over = at("short-over-fit");
   const hot = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", over], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "erraticaac", "ffmpeg"), MUSICFIT_TEST_STATE: at(`short-over-${process.hrtime.bigint()}`), MUSICFIT_TEST_PEAKS: "0.2 0.3 0.4 0.5", MUSICFIT_TEST_LOUDNESS: "-15.3 -15.3 -15.3 -15.3" } });
   assert.equal(hot.status, 0, hot.stderr);
-  assert.match(hot.stdout, /\n {2}Note {4}After the AAC encoding the true peak of video\.mp4 is 0\.2 dBTP, over -1 dBTP\.\n {2}Note {4}video\.mp4 is at -15\.3 LUFS after the AAC encoding, short of the -14 LUFS asked for\.\n/);
+  assert.match(hot.stdout, /\n {2}Note {4}After the AAC encoding the true peak of video\.mp4 is 0\.2 dBTP, over -1 dBTP\.\n {2}Note {4}video\.mp4 is at -15\.3 LUFS after the AAC encoding, short of the -14 LUFS asked for, with true peaks at 0\.2 dBTP\.\n/);
   const hotMd = fs.readFileSync(path.join(over, "FIT.md"), "utf8");
   assert.match(hotMd, /the whole raised toward -14 LUFS but stopped at -15\.3 LUFS with true peaks at 0\.2 dBTP, measured after the AAC encoding\./);
   assert.doesNotMatch(hotMd, /would pass -1 dBTP/);
+  // Short of the target with true peaks well under -1 dBTP: there was room,
+  // so the peaks are not the reason, and both numbers are said.
+  const under = at("short-under-fit");
+  const low = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", under], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "erraticaac", "ffmpeg"), MUSICFIT_TEST_STATE: at(`short-under-${process.hrtime.bigint()}`), MUSICFIT_TEST_PEAKS: "-3.9", MUSICFIT_TEST_LOUDNESS: "-15.3" } });
+  assert.equal(low.status, 0, low.stderr);
+  assert.match(low.stdout, /\n {2}Note {4}video\.mp4 is at -15\.3 LUFS after the AAC encoding, short of the -14 LUFS asked for, with true peaks at -3\.9 dBTP\.\n/);
+  assert.doesNotMatch(low.stdout, /would pass -1 dBTP/);
+  const lowMd = fs.readFileSync(path.join(under, "FIT.md"), "utf8");
+  assert.match(lowMd, /the whole raised toward -14 LUFS but stopped at -15\.3 LUFS with true peaks at -3\.9 dBTP, measured after the AAC encoding\./);
+  assert.doesNotMatch(lowMd, /would pass -1 dBTP/);
+});
+
+test("true peaks are the reason a loudness stopped short only at -1 dBTP or within half a dB under it", () => {
+  const { heldAtCeiling } = require("../skills/musicfit/scripts/lib/report");
+  for (const peak of [-1, -1.1, -1.5]) assert.equal(heldAtCeiling(peak), true, peak);
+  for (const peak of [-0.9, 0.2, -1.6, -3.9, null]) assert.equal(heldAtCeiling(peak), false, peak);
+});
+
+// A fit under a film with sound effects kept, through the stand-in that reads
+// the true peaks listed and the loudness each encoding really has.
+function erraticKeep(name, peaks) {
+  const state = at(`${name}-${process.hrtime.bigint()}`);
+  const out = at(name);
+  const run = spawnSync(process.execPath, [CLI, fixture("house").file, "--length", "12", "--hit", "8", "--video", film("film25", { sound: effects() }), "--video-sound", "keep", "--out", out], { encoding: "utf8", env: { ...process.env, FFMPEG_PATH: path.join(__dirname, "fixtures", "erraticaac", "ffmpeg"), MUSICFIT_TEST_STATE: state, MUSICFIT_TEST_PEAKS: peaks, MUSICFIT_TEST_LOUDNESS: "real" } });
+  assert.equal(run.status, 0, run.stderr);
+  const readings = fs.readFileSync(`${state}.loudness`, "utf8").trim().split("\n").map(Number);
+  return { c: cuesOf(out), out, run, state, readings };
+}
+
+test("with keep, a peak the encoder lifted by chance costs the first encoding's excess and half a LU at most: the sound is not turned down by what one encoding overshot", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  // The first encoding is 0.3 dB over, the next 2.7 dB, the next under -1 dBTP.
+  const { c, readings } = erraticKeep("erratic-keep", "-0.7 1.7 -1.2");
+  assert.equal(readings.length, 3);
+  assert.ok(readings[0] - readings[2] <= 0.3 + 0.5 + 0.15, `the three encodings read ${readings.join(", ")} LUFS`);
+  assert.equal(c.video.loudness.truePeak, -1.2);
+  assert.equal(c.video.loudness.integrated, readings[2]);
+  assert.deepEqual(c.warnings.filter((w) => /over -1 dBTP/.test(w)), []);
+});
+
+test("with keep, when no encoding comes in at -1 dBTP or under, video.mp4 keeps the first, the loudest, and a note says it is over", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const { c, out, state, readings } = erraticKeep("erratic-keep-over", "-0.7 1.7 0.9 -0.8");
+  assert.equal(readings.length, 4);
+  assert.equal(c.video.loudness.truePeak, -0.7);
+  assert.equal(c.video.loudness.integrated, readings[0]);
+  assert.deepEqual(c.warnings.filter((w) => /over -1 dBTP/.test(w)), ["After the AAC encoding the true peak of video.mp4 is -0.7 dBTP, over -1 dBTP."]);
+  const kept = ffmpeg(["-i", path.join(out, "video.mp4"), "-map", "0:a", "-c", "copy", "-f", "framecrc", "pipe:1"]).stdout.split("\n").filter((l) => /^\d/.test(l));
+  assert.deepEqual(kept, fs.readFileSync(`${state}.1`, "utf8").split("\n").filter((l) => /^\d/.test(l)));
 });
 
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
@@ -1117,11 +1164,14 @@ test("FIT.md says what plays under the picture in plain words, and never that th
     // With keep the music does not dip under the video's own sound.
     if (c.video.sound === "keep" && !c.voice) assert.doesNotMatch(md, /dip/, label);
   }
-  assert.match(fitMarkdown({ ...base, voice: null, video: null }, { trackName: "house.wav" }), /Loudness raised toward -14 LUFS but stopped at -24 LUFS, with a limiter holding the true peaks at -6\.9 dBTP: any louder and the peaks would pass -1 dBTP\./);
-  // A true peak the limiter did not hold under -1 dBTP is no reason it stopped.
-  const over = fitMarkdown({ ...base, voice: null, video: null, loudness: { ...base.loudness, integrated: -15.3, truePeak: 0.4 } }, { trackName: "house.wav" });
-  assert.match(over, /Loudness raised toward -14 LUFS but stopped at -15\.3 LUFS, with a limiter holding the true peaks at 0\.4 dBTP\./);
-  assert.doesNotMatch(over, /would pass -1 dBTP/);
+  const stopped = (truePeak) => fitMarkdown({ ...base, voice: null, video: null, loudness: { ...base.loudness, integrated: -15.3, truePeak } }, { trackName: "house.wav" });
+  assert.match(stopped(-1.2), /Loudness raised toward -14 LUFS but stopped at -15\.3 LUFS, with a limiter holding the true peaks at -1\.2 dBTP: any louder and the peaks would pass -1 dBTP\./);
+  // A true peak the limiter did not hold under -1 dBTP, or one well under
+  // it with room to spare, is no reason it stopped.
+  for (const peak of [0.4, -6.9]) {
+    assert.ok(stopped(peak).includes(`Loudness raised toward -14 LUFS but stopped at -15.3 LUFS, with a limiter holding the true peaks at ${peak} dBTP.`), String(peak));
+    assert.doesNotMatch(stopped(peak), /would pass -1 dBTP/);
+  }
 });
 
 test("with --video-sound voice and no voice, FIT.md says the loudness was set where the video's own sound does not play", () => {
