@@ -1162,6 +1162,33 @@ test("a video with more than one sound stream: sound in a later one under a sile
   assert.match(quiet.stdout, /Note {4}all-silent\.mp4 has 2 sound streams and only the first is read/);
 });
 
+test("subtitle streams, which video.mp4 does not hold, are named in a note, whatever becomes of the video's own sound", () => {
+  const { file } = fixture("house");
+  const words = at("words.srt");
+  fs.writeFileSync(words, "1\n00:00:01,000 --> 00:00:03,000\nHello there\n\n2\n00:00:05,000 --> 00:00:07,000\nAnd again\n");
+  const subtitled = (name, streams) => {
+    const made = at(`${name}.mp4`);
+    if (!fs.existsSync(made)) ffmpeg(["-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", ...Array(streams).fill(["-i", words]).flat(), "-map", "0:v:0", ...Array.from({ length: streams }, (_, k) => ["-map", `${k + 1}:s:0`]).flat(), "-c:v", "mpeg4", "-q:v", "6", "-c:s", "mov_text", "-t", "12", made]);
+    return made;
+  };
+  const one = subtitled("subtitled", 1);
+  const note = "subtitled.mp4 has a subtitle stream, which is not in video.mp4.";
+  for (const how of [[], ["--video-sound", "drop"]]) {
+    const out = at(`subtitled-fit-${how.length}`);
+    const run = cli([file, "--length", "12", "--hit", "8", "--video", one, ...how, "--out", out]);
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(run.stdout.includes(`\n  Note    ${note}\n`), run.stdout);
+    assert.ok(cuesOf(out).warnings.includes(note));
+    assert.ok(fs.readFileSync(path.join(out, "FIT.md"), "utf8").includes(`\n- ${note}\n`));
+    assert.doesNotMatch(said(path.join(out, "video.mp4")), /: Subtitle: /);
+  }
+  const two = cli([file, "--length", "12", "--hit", "8", "--video", subtitled("subtitled-twice", 2), "--out", at("subtitled-twice-fit")]);
+  assert.equal(two.status, 0, two.stderr);
+  assert.ok(two.stdout.includes("\n  Note    subtitled-twice.mp4 has 2 subtitle streams, which are not in video.mp4.\n"), two.stdout);
+  // A video with none has nothing to say about them.
+  assert.doesNotMatch(cli([file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", at("no-words-fit")]).stdout, /subtitle/);
+});
+
 test("the run's own files are read by their names from their own folder, so an out folder with a % in its name, which the hosted ffmpeg refuses as an input, ends well; a relative FFMPEG_PATH still finds that ffmpeg", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, async () => {
   const { file } = fixture("house");
   const repo = path.resolve(__dirname, "..");

@@ -137,6 +137,8 @@ async function readVideo(track, o) {
   fits(picture, o.length, o.fps);
   if (adopted && !picture.constant) o.warnings.push(`${picture.name} has no steady frame rate, so the frames in cues.json count at its average, ${fpsText(o.fps)} fps.`);
   if (!adopted && Math.abs(picture.fps - o.fps) > picture.fps * 0.0005) o.warnings.push(`${picture.name} runs at ${fpsText(picture.fps)} fps and --fps is ${fpsText(o.fps)}, so the frames in cues.json are not the video's: leave --fps out, or give --fps ${fpsText(picture.fps)}, to count them as the video does.`);
+  // Only the picture and the new sound go into video.mp4.
+  if (picture.subtitles) o.warnings.push(picture.subtitles === 1 ? `${picture.name} has a subtitle stream, which is not in video.mp4.` : `${picture.name} has ${picture.subtitles} subtitle streams, which are not in video.mp4.`);
 
   // The same sound is never laid in twice: when the video itself is given
   // as the track, or as the voice, its own sound is left out and the track

@@ -58,8 +58,8 @@ function inputSection(said) {
 
 // The video's picture as its packets give it: how long it is, its frames,
 // its frame rate and whether that holds steady, the codec of its picture
-// and of its first sound stream, how many sound streams it has, and whether
-// musicfit made it. One frame is copied into
+// and of its first sound stream, how many sound and subtitle streams it has,
+// and whether musicfit made it. One frame is copied into
 // an MP4 too, into a pipe, to see that an MP4 holds the picture as it is.
 // Refused with the reason when the video cannot be read, is cut short or
 // damaged, has no picture or a still one, or holds a picture an MP4 cannot
@@ -89,6 +89,7 @@ async function probe(file) {
   const lines = input.split("\n");
   const pictureLine = lines.find((l) => /^\s*Stream #0:\d+.*: Video: /.test(l) && !/\(attached pic\)/.test(l)) || "";
   const soundLines = lines.filter((l) => /^\s*Stream #0:\d+.*: Audio: /.test(l));
+  const subtitleLines = lines.filter((l) => /^\s*Stream #0:\d+.*: Subtitle: /.test(l));
   const format = (/Input #0, ([^,\s]+)/.exec(input) || [])[1] || "";
   // The file's own tags come before its duration; the streams' after.
   const head = input.slice(0, Math.max(0, input.search(/^\s*Duration:/m)));
@@ -182,6 +183,7 @@ async function probe(file) {
     picture: (/: Video: (\w+)/.exec(pictureLine) || [])[1] || "unknown",
     sound: soundLines.length ? (/: Audio: (\w+)/.exec(soundLines[0]) || [])[1] || "unknown" : null,
     sounds: soundLines.length,
+    subtitles: subtitleLines.length,
     made: MARK.test(comment.trim()),
   };
 }
