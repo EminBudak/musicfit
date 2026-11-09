@@ -322,6 +322,9 @@ const and = (names) => (names.length === 1 ? names[0] : `${names.slice(0, -1).jo
 function claim(dir, writes, inputs = []) {
   writable(dir);
   if (!fs.existsSync(dir)) return;
+  // A run killed while it put its files there is undone first.
+  const stale = staleLock(path.join(dir, LOCK));
+  if (stale !== null) takeOver(path.resolve(dir), stale);
   for (const name of writes) {
     const s = lstat(path.join(dir, name));
     if (s && s.isDirectory()) throw new Error(`${path.join(dir, name)} is a folder, and this run writes its ${name} there: move it, or give another --out`);
@@ -529,6 +532,80 @@ function staleLock(at) {
   return gone || age > LOCK_STALE || (!named && age > LOCK_BARE) ? text : null;
 }
 
+// A lock a killed run left is taken away, only while it is still the one
+// found stale. A run killed in the moment it moved its files in (kill -9,
+// or the system when memory runs out) left some of its new files in the out
+// folder, and the earlier cues.json, with some earlier files, in its hidden
+// folder's .old; its own cues.json, which goes in last, is still in that
+// hidden folder. Under the lock, taken over, the out folder is put back as
+// it was before that run: its new files go back to its hidden folder, which
+// then goes, and the earlier files come back, cues.json last.
+function takeOver(target, stale) {
+  const at = path.join(target, LOCK);
+  if (staleLock(at) !== stale) return;
+  fs.rmSync(at, { force: true });
+  const work = halfDone(target, Number(stale.trim().split(" ")[1]));
+  if (!work) return;
+  try {
+    if (!lock(at)) return;
+  } catch {
+    return;
+  }
+  try {
+    putBack(target, work);
+  } finally {
+    try {
+      fs.unlinkSync(at);
+    } catch {
+      // Gone already.
+    }
+  }
+}
+
+// The hidden folder of the run `pid`, in the out folder or next to it, that
+// still holds its cues.json: one killed before it had put all its files in.
+function halfDone(target, pid) {
+  if (!(pid > 0)) return null;
+  for (const home of [target, path.dirname(target)]) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(home);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const m = PART.exec(name);
+      if (m && Number(m[1]) === pid && cuesAt(path.join(home, name, "cues.json"))) return path.join(home, name);
+    }
+  }
+  return null;
+}
+
+// The moves that undo a commit cut short. A file in the out folder goes back
+// only when it is that run's, as its cues.json records it, and an earlier
+// file only to a place that is free; whatever cannot move stays where it is.
+function putBack(target, work) {
+  const fresh = cuesAt(path.join(work, "cues.json"));
+  const sha = fresh.sha256 && typeof fresh.sha256 === "object" ? fresh.sha256 : {};
+  try {
+    for (const name of NAMES.filter((n) => n !== "cues.json")) {
+      const there = path.join(target, name);
+      const s = lstat(there);
+      if (s && s.isFile() && !lstat(path.join(work, name)) && typeof sha[name] === "string" && digest(there) === sha[name]) rename(there, path.join(work, name));
+    }
+    const old = path.join(work, ".old");
+    const names = lstat(old) ? fs.readdirSync(old) : [];
+    let all = true;
+    for (const name of [...names.filter((n) => n !== "cues.json"), ...names.filter((n) => n === "cues.json")]) {
+      if (NAMES.includes(name) && !lstat(path.join(target, name))) rename(path.join(old, name), path.join(target, name));
+      else all = false;
+    }
+    if (all) remove(work);
+  } catch {
+    // Left as far as it got; the run then refuses what is not musicfit's.
+  }
+}
+
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Puts the run's files in place. A commit that fails says so once the run's
@@ -606,8 +683,7 @@ async function place(state) {
     }
     const stale = staleLock(at);
     if (stale !== null) {
-      // Taken away only while it is still the one found stale.
-      if (staleLock(at) === stale) fs.rmSync(at, { force: true });
+      takeOver(target, stale);
       continue;
     }
     // A folder or a pipe under the lock's name is no lock a run made, and

@@ -1289,3 +1289,41 @@ test("in a folder musicfit 0.1 wrote, a file counts as its own only while it loo
   assert.equal(other.status, 1, other.stderr);
   assert.match(other.stderr, /fitted\.wav is not the fitted\.wav musicfit wrote there/);
 });
+
+test("a run killed in the moment it moved its files in is undone by the next run there, which puts the earlier files back before anything else", async () => {
+  const { file } = fixture("house");
+  const folder = goodFit("killed-mid-commit");
+  const before = snapshot(folder);
+  // The killed run's hidden folder: its new files and its cues.json, and in
+  // .old the earlier cues.json and fitted.wav, moved aside; its new
+  // fitted.wav moved in; its lock, naming its process, which is gone.
+  const dead = deadPid();
+  const work = path.join(folder, `.musicfit-part-${dead}-0badc0de`);
+  fs.mkdirSync(path.join(work, ".old"), { recursive: true });
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(work, name), `killed run's ${name}\n`);
+  await out.record({ file: (name) => path.join(work, name) }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
+  for (const name of ["cues.json", "fitted.wav"]) fs.renameSync(path.join(folder, name), path.join(work, ".old", name));
+  fs.renameSync(path.join(work, "fitted.wav"), path.join(folder, "fitted.wav"));
+  fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${dead}\n`);
+  // A run refused once it has begun, for a video of another length, finds
+  // the folder as it was before the killed run, and leaves it so.
+  const film = path.join(dir, "killed-mid-commit.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=5", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const refused = cli([file, "--length", "12", "--video", film, "--out", folder]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /killed-mid-commit\.mp4 is 5\.00 s long/);
+  assert.deepEqual(snapshot(folder), before);
+  // The same state again, and a run that ends well.
+  fs.mkdirSync(path.join(work, ".old"), { recursive: true });
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(work, name), `killed run's ${name}\n`);
+  await out.record({ file: (name) => path.join(work, name) }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
+  for (const name of ["cues.json", "fitted.wav"]) fs.renameSync(path.join(folder, name), path.join(work, ".old", name));
+  fs.renameSync(path.join(work, "fitted.wav"), path.join(folder, "fitted.wav"));
+  fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${dead}\n`);
+  const run = cli([file, "--length", "12", "--out", folder]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, new RegExp(`Note    This run removed the earlier fit's mix\\.wav from ${quote(folder)}, as it does not write one\\.`));
+  assert.deepEqual(fs.readdirSync(folder).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "cues.json"), "utf8")).musicfit, require("../package.json").version);
+});
