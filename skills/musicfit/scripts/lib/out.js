@@ -132,9 +132,9 @@ function listed(dir, c = cuesIn(dir)) {
 // else's files, or a file changed since, cues.json itself included, never
 // makes them musicfit's. FIT.md may have had its line ends turned into CR
 // LF, as git does on Windows. A cues.json with no SHA-256s, as musicfit 0.1
-// wrote it, is taken at its word for the names 0.1 wrote; 0.1 wrote no
-// video.mp4. A folder or a link under one of those names is not the
-// earlier run's.
+// wrote it, is taken at its word for itself, and for the files it lists
+// only while they look as 0.1 left them (see asLeft()). A folder or a link
+// under one of those names is not the earlier run's.
 function earlier(dir) {
   const c = cuesIn(dir);
   const names = listed(dir, c);
@@ -144,11 +144,7 @@ function earlier(dir) {
     const at = path.join(dir, name);
     const s = lstat(at);
     if (!s || !s.isFile()) return false;
-    if (!sha) {
-      if (name === "cues.json") return true;
-      if (!c.sizes) return name !== VIDEO;
-      return s.size === sizes[name] && (name !== VIDEO || require("./video").marked(at));
-    }
+    if (!sha) return name === "cues.json" || asLeft(at, name, s, c, lstat(path.join(dir, "cues.json")));
     if (name === "cues.json") return sealed(c);
     if (typeof sha[name] !== "string") return false;
     if (s.size === sizes[name]) return digest(at) === sha[name];
@@ -158,6 +154,79 @@ function earlier(dir) {
     return text !== null && text.includes("\r\n") && hash(text.replace(/\r\n/g, "\n")) === sha[name];
   };
   return NAMES.filter((name) => names.includes(name) && kept(name));
+}
+
+// Whether a file a cues.json of musicfit 0.1 lists looks as 0.1 left it.
+// 0.1 kept no record of its files, but wrote them all within moments of
+// cues.json, each of its own kind: fitted.wav and mix.wav 48 kHz stereo at
+// 24 bits and cues.json's length long, seams.png a PNG that names musicfit
+// as its maker, FIT.md headed with the track's name. A file of another
+// kind, or one changed more than a minute before or after cues.json was
+// written, is the user's. 0.1 wrote no video.mp4.
+const MOMENTS = 60 * 1000;
+function asLeft(at, name, s, c, cues) {
+  if (!cues || Math.abs(s.mtimeMs - cues.mtimeMs) > MOMENTS) return false;
+  if (name === "fitted.wav" || name === "mix.wav") {
+    const wav = wavOf(at);
+    return Boolean(wav) && wav.rate === 48000 && wav.channels === 2 && wav.bits === 24 && Math.abs(wav.frames - c.length * 48000) <= 25;
+  }
+  if (name === "seams.png") return pngMaker(at) === "musicfit";
+  if (name === "FIT.md") {
+    const head = readHead(at, 4096).toString("utf8");
+    const title = `# ${c.track}`;
+    return head.startsWith(title) && /^( fitted to |\r?\n)/.test(head.slice(title.length));
+  }
+  return false;
+}
+
+// The first bytes of a file of its own, read without following a link or
+// waiting on a pipe; none for anything else.
+function readHead(at, most) {
+  const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
+  let fd;
+  try {
+    fd = fs.openSync(at, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    if (!fs.fstatSync(fd).isFile()) return Buffer.alloc(0);
+    const bytes = Buffer.alloc(most);
+    return bytes.subarray(0, fs.readSync(fd, bytes, 0, most, 0));
+  } catch {
+    return Buffer.alloc(0);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// A WAV file's rate, channels, bits and length in frames, from its chunks;
+// null when it is not one.
+function wavOf(at) {
+  const b = readHead(at, 65536);
+  if (b.length < 12 || b.toString("latin1", 0, 4) !== "RIFF" || b.toString("latin1", 8, 12) !== "WAVE") return null;
+  let fmt = null;
+  for (let p = 12; p + 8 <= b.length; ) {
+    const id = b.toString("latin1", p, p + 4);
+    const size = b.readUInt32LE(p + 4);
+    if (id === "fmt " && size >= 16 && p + 24 <= b.length) fmt = { channels: b.readUInt16LE(p + 10), rate: b.readUInt32LE(p + 12), bits: b.readUInt16LE(p + 22) };
+    if (id === "data") return fmt && fmt.channels && fmt.bits ? { ...fmt, frames: size / (fmt.channels * (fmt.bits / 8)) } : null;
+    p += 8 + size + (size & 1);
+  }
+  return null;
+}
+
+// The Software text of a PNG, as musicfit 0.1 wrote it before the picture.
+function pngMaker(at) {
+  const b = readHead(at, 4096);
+  if (b.length < 8 || !b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return null;
+  for (let p = 8; p + 8 <= b.length; ) {
+    const size = b.readUInt32BE(p);
+    const type = b.toString("latin1", p + 4, p + 8);
+    if (type === "IDAT" || p + 8 + size > b.length) return null;
+    if (type === "tEXt") {
+      const [key, value] = b.toString("latin1", p + 8, p + 8 + size).split("\0");
+      if (key === "Software") return value;
+    }
+    p += 12 + size;
+  }
+  return null;
 }
 
 const hash = (text) => crypto.createHash("sha256").update(text).digest("hex");

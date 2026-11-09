@@ -311,14 +311,14 @@ test("a commit that fails never moves back over a file that came in its place, n
 
 test("two runs that put their files in one folder at the same moment take turns, and the later one's files are what is left", async () => {
   const folder = goodFit("taking-turns");
-  const fill = (run, who) => {
+  const fill = async (run, who) => {
     for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(run.file(name), `${who} ${name}\n`);
-    fs.writeFileSync(run.file("cues.json"), JSON.stringify({ musicfit: "test", file: "fitted.wav", mix: null, video: null, run: who }) + "\n");
+    await out.record(run, { musicfit: "test", file: "fitted.wav", mix: null, video: null, run: who });
   };
   const a = out.begin(folder);
-  fill(a, "A");
+  await fill(a, "A");
   const b = out.begin(folder);
-  fill(b, "B");
+  await fill(b, "B");
   const real = fs.renameSync;
   let later = null;
   try {
@@ -1016,8 +1016,8 @@ test("a fit whose commit fails says where the earlier files went, in a folder th
 test("a commit that fails with only a new file stuck in the out folder leaves no hidden folder", async () => {
   const folder = outDir("new-stuck");
   fs.mkdirSync(folder);
-  fs.writeFileSync(path.join(folder, "cues.json"), JSON.stringify({ musicfit: "test", file: "fitted.wav", mix: null, video: null }));
   for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(folder, name), `old ${name}\n`);
+  await out.record({ file: (name) => path.join(folder, name) }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
   const run = out.begin(folder);
   for (const name of ["fitted.wav", "cues.json", "seams.png", "FIT.md", "video.mp4"]) fs.writeFileSync(run.file(name), `new ${name}\n`);
   const real = { renameSync: fs.renameSync, unlinkSync: fs.unlinkSync };
@@ -1206,4 +1206,86 @@ test("a cues.json, a lock or the cues.json beside a video that is a pipe or a li
   const again = await bounded([file, "--length", "12", "--video", path.join(fitted, "video.mp4"), "--video-sound", "keep", "--out", outDir("piped-beside-again")]);
   assert.equal(again.code, 1, `${again.signal} ${again.stderr}`);
   assert.match(again.stderr, /musicfit: video\.mp4 is a video musicfit made, so its own sound has a fitted track in it already: give --video the video it was made from, or --video-sound drop to leave that sound out\n$/);
+});
+
+// A folder as musicfit 0.1 left it: its cues.json lists the files with no
+// record of them, and its WAVs carry the version of the ffmpeg that wrote
+// them. Made from a fit of this release, by taking that record out and
+// writing the WAVs again as ffmpeg does by default.
+function oldFolder(name, args) {
+  const folder = outDir(name);
+  const run = cli([fixture("house").file, ...args, "--out", folder]);
+  assert.equal(run.status, 0, run.stderr);
+  const cuesFile = path.join(folder, "cues.json");
+  const c = JSON.parse(fs.readFileSync(cuesFile, "utf8"));
+  delete c.sizes;
+  delete c.sha256;
+  delete c.video;
+  for (const wav of ["fitted.wav", "mix.wav"].filter((n) => fs.existsSync(path.join(folder, n)))) {
+    const again = path.join(folder, `again-${wav}`);
+    const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-i", path.join(folder, wav), "-c:a", "pcm_s24le", again], { encoding: "utf8" });
+    assert.equal(made.status, 0, made.stderr);
+    fs.renameSync(again, path.join(folder, wav));
+  }
+  fs.writeFileSync(cuesFile, JSON.stringify(c, null, 2) + "\n");
+  return folder;
+}
+
+// A stereo WAV of `seconds`, 48 kHz at 16 bits.
+function wav16(file, seconds) {
+  const L = new Float32Array(Math.round(seconds * 48000)).map((_, i) => 0.1 * Math.sin(i / 20));
+  writeWav(file, { rate: 48000, L, R: L });
+}
+
+test("in a folder musicfit 0.1 wrote, a file counts as its own only while it looks as 0.1 left it, so the user's files there are never replaced", () => {
+  const { file } = fixture("house");
+  const voiceFile = fixture("voice").file;
+  // An upgrade: the 0.1 fit's mix.wav goes with the first fit without a voice.
+  const upgrade = oldFolder("old-upgrade", ["--length", "12", "--hit", "8", "--voice", voiceFile]);
+  const plain = cli([file, "--length", "12", "--out", upgrade]);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, new RegExp(`Note    This run removed the earlier fit's mix\\.wav from ${quote(upgrade)}, as it does not write one\\.`));
+  assert.deepEqual(fs.readdirSync(upgrade).sort(), ["FIT.md", "cues.json", "fitted.wav", "seams.png"]);
+
+  // The user's own mix put in its place: left alone by a fit without a voice,
+  // and a fit with one is refused.
+  const mixed = oldFolder("old-mixed", ["--length", "12", "--hit", "8", "--voice", voiceFile]);
+  wav16(path.join(mixed, "mix.wav"), 12);
+  const theirs = snapshot(mixed)["mix.wav"];
+  const withVoice = cli([file, "--length", "12", "--voice", voiceFile, "--out", mixed]);
+  assert.equal(withVoice.status, 1, withVoice.stderr);
+  assert.match(withVoice.stderr, new RegExp(`musicfit: ${quote(path.join(mixed, "mix.wav"))} is not the mix\\.wav musicfit wrote there, and this run would replace it`));
+  const without = cli([file, "--length", "12", "--out", mixed]);
+  assert.equal(without.status, 0, without.stderr);
+  assert.doesNotMatch(without.stdout, /This run removed/);
+  assert.equal(snapshot(mixed)["mix.wav"], theirs);
+
+  // A FIT.md the user changed after the run, and a seams.png of another
+  // program's, under a cues.json copied with them: each is refused.
+  const changed = oldFolder("old-changed", ["--length", "12", "--hit", "8"]);
+  const notes = path.join(changed, "FIT.md");
+  fs.appendFileSync(notes, "\nMy notes on the cut.\n");
+  const later = new Date(fs.statSync(path.join(changed, "cues.json")).mtimeMs + 5 * 60000);
+  fs.utimesSync(notes, later, later);
+  const edited = cli([file, "--length", "12", "--out", changed]);
+  assert.equal(edited.status, 1, edited.stderr);
+  assert.match(edited.stderr, new RegExp(`musicfit: ${quote(notes)} is not the FIT\\.md musicfit wrote there, and this run would replace it`));
+  const copied = outDir("old-copied");
+  fs.mkdirSync(copied);
+  fs.copyFileSync(path.join(changed, "cues.json"), path.join(copied, "cues.json"));
+  wav16(path.join(copied, "fitted.wav"), 12);
+  fs.writeFileSync(path.join(copied, "seams.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const before = snapshot(copied);
+  const over = cli([file, "--length", "12", "--out", copied]);
+  assert.equal(over.status, 1, over.stderr);
+  assert.match(over.stderr, new RegExp(`musicfit: ${quote(copied)} holds fitted\\.wav and seams\\.png, which are not the files musicfit wrote there, and this run would replace them`));
+  assert.deepEqual(snapshot(copied), before);
+  // 24-bit stereo of another length is not 0.1's fitted.wav either.
+  const longer = outDir("old-longer");
+  fs.mkdirSync(longer);
+  fs.copyFileSync(path.join(changed, "cues.json"), path.join(longer, "cues.json"));
+  fs.copyFileSync(file, path.join(longer, "fitted.wav"));
+  const other = cli([file, "--length", "12", "--out", longer]);
+  assert.equal(other.status, 1, other.stderr);
+  assert.match(other.stderr, /fitted\.wav is not the fitted\.wav musicfit wrote there/);
 });

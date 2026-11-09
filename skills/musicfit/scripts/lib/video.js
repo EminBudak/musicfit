@@ -36,55 +36,6 @@ function nominal(fps) {
 const mark = (version) => `musicfit ${version}: a fitted track laid under this picture`;
 const MARK = /^musicfit \S+: a fitted track laid under this picture$/;
 
-// Whether an MP4 carries that mark, read from its boxes (moov, udta, meta,
-// ilst, the comment, its data) without ffmpeg, so the out folder can be
-// looked at in a moment: before any work, and again as a run puts its
-// files in place. Only an MP4 as ffmpeg's muxer writes it is read so;
-// anything else is not one musicfit made.
-function marked(file) {
-  let fd;
-  try {
-    // Not through a link, and never waiting on a pipe.
-    const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
-    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
-    if (!fs.fstatSync(fd).isFile()) return false;
-    const head = Buffer.alloc(16);
-    // The first box of `type` in [start, end): where its content starts and
-    // where it ends. A size of 1 is followed by a 64-bit one, and 0 runs to
-    // the end.
-    const find = (within, type) => {
-      if (!within) return null;
-      for (let at = within.start; at + 8 <= within.end; ) {
-        const got = fs.readSync(fd, head, 0, 16, at);
-        if (got < 8) return null;
-        let size = head.readUInt32BE(0);
-        let start = at + 8;
-        if (size === 1 && got === 16) {
-          size = Number(head.readBigUInt64BE(8));
-          start += 8;
-        } else if (size === 0) size = within.end - at;
-        if (size < start - at || at + size > within.end) return null;
-        if (head.toString("latin1", 4, 8) === type) return { start, end: at + size };
-        at += size;
-      }
-      return null;
-    };
-    const meta = find(find(find({ start: 0, end: fs.fstatSync(fd).size }, "moov"), "udta"), "meta");
-    // An MP4's meta box opens with four bytes of version and flags; the
-    // comment's data with four of type and four of locale.
-    const data = find(find(find(meta && { start: meta.start + 4, end: meta.end }, "ilst"), "©cmt"), "data");
-    const length = data ? data.end - data.start - 8 : -1;
-    if (length < 1 || length > 1024) return false;
-    const text = Buffer.alloc(length);
-    fs.readSync(fd, text, 0, length, data.start + 8);
-    return MARK.test(text.toString("utf8"));
-  } catch {
-    return false;
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
-  }
-}
-
 // What ffmpeg prints while it reads a file that is cut short or has a
 // broken packet: a packet cut off at the end, an MP4's samples past the end
 // of the file, a Matroska or WebM file that stops in the middle. Only its
@@ -304,4 +255,4 @@ async function mux(file, sound, out, { picture, comment, start }) {
   if (why) throw new Error(`The video.mp4 this run wrote cannot be read back (${why}), so it was not put in place`);
 }
 
-module.exports = { probe, fits, ownSound, encodeAac, mux, mark, marked, fpsText };
+module.exports = { probe, fits, ownSound, encodeAac, mux, mark, fpsText };
