@@ -328,14 +328,31 @@ function sameFile(a, b) {
 
 const and = (names) => (names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 
+// Waits while another run is moving its files in `target`, in short steps
+// that leave a stop free to be heard: until the moves are done, cues.json is
+// not there to say whose files the others are. A lock a killed run left is
+// undone first, and one that goes stale meanwhile too, so the folder is read
+// only when it holds one run's files. A folder or a pipe under the lock's
+// name is no lock a run made, and place() says so.
+async function commitDone(target) {
+  const at = path.join(target, LOCK);
+  const started = Date.now();
+  for (;;) {
+    undoKilled(target);
+    const s = lstat(at);
+    if (!s || !s.isFile() || Date.now() - started > LOCK_WAIT) return;
+    await pause(25);
+  }
+}
+
 // Checked before any work, for the names this run writes and the files it
 // reads: the folder can be written, none of those names is a folder there
 // or a file that is not the earlier run's as it wrote it, and no input is
 // a file this run replaces or removes once it ends well.
-function claim(dir, writes, inputs = []) {
+async function claim(dir, writes, inputs = []) {
   writable(dir);
   if (!fs.existsSync(dir)) return;
-  undoKilled(path.resolve(dir));
+  await commitDone(path.resolve(dir));
   for (const name of writes) {
     const s = lstat(path.join(dir, name));
     if (s && s.isDirectory()) throw new Error(`${path.join(dir, name)} is a folder, and this run writes its ${name} there: move it, or give another --out`);
@@ -436,8 +453,9 @@ let hooked = false;
 // earlier run's files in `dir` that a run writing `writes` does not make
 // again, for its reports to say, and those are the ones it removes: commit()
 // puts the outputs in place and removes them, abort() leaves no trace. A run
-// killed in that folder's commit since this run's claim() is undone first, so
-// removes() never reads a folder left half moved.
+// killed in that folder's commit since this run's claim() is undone first,
+// and one in the middle of its commit waited for, so removes() never reads a
+// folder left half moved.
 function begin(dir) {
   const state = {
     dir,
@@ -448,8 +466,8 @@ function begin(dir) {
     removing: null,
     file: (name) => path.join(open(state), name),
     scratch: (name) => path.join(open(state), ".tmp", name),
-    removes: (writes) => {
-      undoKilled(state.target);
+    removes: async (writes) => {
+      await commitDone(state.target);
       return (state.removing = earlier(state.target).filter((name) => !writes.includes(name)));
     },
     commit: () => commit(state),

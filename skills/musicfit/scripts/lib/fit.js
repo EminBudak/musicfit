@@ -107,9 +107,10 @@ async function fit(track, options) {
   files(track, options);
   const dir = outDir(track, options);
   const writes = options.analyze ? ["cues.json", "seams.png", "FIT.md"] : ["fitted.wav", ...(options.voice ? ["mix.wav"] : []), ...(options.video ? ["video.mp4"] : []), "cues.json", "seams.png", "FIT.md"];
-  claim(dir, writes, [track, options.voice, options.video]);
+  // Begun first, so a stop while it waits for another run in that folder is said.
   const run = begin(dir);
   try {
+    await claim(dir, writes, [track, options.voice, options.video]);
     const o = { ...options, warnings: [...(options.warnings || [])] };
     // The video is read before any work, so one that cannot take this fit
     // is refused first.
@@ -300,8 +301,8 @@ function removedNote(names, dir) {
 // the reports can name the earlier run's files it removes.
 async function make(track, options, run, video, writes) {
   // Looked at once the work is done, just before the reports are written.
-  const removes = () => {
-    const gone = run.removes(writes);
+  const removes = async () => {
+    const gone = await run.removes(writes);
     if (gone.length) options.warnings.push(removedNote(gone, run.dir));
   };
   const log = options.log || (() => {});
@@ -320,7 +321,7 @@ async function make(track, options, run, video, writes) {
   else log("No steady beat");
 
   if (options.analyze) {
-    removes();
+    await removes();
     const c = analysisCues({ version, track: trackName, analysis: a, options });
     fs.writeFileSync(run.file("FIT.md"), analysisMarkdown(c, { trackName }));
     fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: { ...c, segments: [] }, source, fitted: null, rate: RATE, analysis: a }));
@@ -446,7 +447,7 @@ async function make(track, options, run, video, writes) {
   }
 
   await encodeWav(music, run.file("fitted.wav"));
-  removes();
+  await removes();
   const c = makeCues({ version, track: trackName, analysis: a, plan: p, result: r, options, loudness, voice, video: laid });
   fs.writeFileSync(run.file("FIT.md"), fitMarkdown(c, { trackName, head: r.head }));
   fs.writeFileSync(run.file("seams.png"), await seamsPng({ cues: c, source, fitted: music, rate: RATE, analysis: a }));
