@@ -1322,6 +1322,24 @@ test("in a folder musicfit 0.1 wrote, a file counts as its own only while it loo
   assert.match(other.stderr, /fitted\.wav is not the fitted\.wav musicfit wrote there/);
 });
 
+test("a link named like a killed run's hidden folder, next to its lock, is never followed: no file of the out folder goes through it", posix, () => {
+  const folder = goodFit("half-done-link");
+  const elsewhere = path.join(dir, "half-done-elsewhere");
+  fs.mkdirSync(elsewhere);
+  fs.copyFileSync(path.join(folder, "cues.json"), path.join(elsewhere, "cues.json"));
+  const before = snapshot(folder);
+  const dead = deadPid();
+  const link = path.join(folder, `.musicfit-part-${dead}-deadbeef`);
+  fs.symlinkSync(elsewhere, link);
+  const lock = path.join(folder, out.LOCK);
+  fs.writeFileSync(lock, `${require("node:os").hostname()} ${dead}\n`);
+  out.claim(folder, ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"]);
+  assert.ok(!fs.existsSync(lock), "the stale lock is still there");
+  fs.unlinkSync(link);
+  assert.deepEqual(snapshot(folder), before);
+  assert.deepEqual(fs.readdirSync(elsewhere), ["cues.json"]);
+});
+
 test("a run killed in the moment it moved its files in is undone by the next run there, which puts the earlier files back before anything else", async () => {
   const { file } = fixture("house");
   const folder = goodFit("killed-mid-commit");

@@ -76,6 +76,12 @@ const isFile = (at) => {
   return Boolean(s) && !s.isDirectory();
 };
 
+// A folder itself, not a link to one.
+const isFolder = (at) => {
+  const s = lstat(at);
+  return Boolean(s) && s.isDirectory();
+};
+
 // The text of a small file of its own, or null for anything else: a link
 // is not followed out of its folder, and a pipe or a device is never opened
 // to wait on, which would hold the run where no stop is heard.
@@ -567,18 +573,19 @@ function takeOver(target, stale) {
 
 // The hidden folder of the run `pid`, in the out folder or next to it, that
 // still holds its cues.json: one killed before it had put all its files in.
+// A link under such a name is no run's folder, and is never followed.
 function halfDone(target, pid) {
   if (!(pid > 0)) return null;
   for (const home of [target, path.dirname(target)]) {
     let entries = [];
     try {
-      entries = fs.readdirSync(home);
+      entries = fs.readdirSync(home, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const name of entries) {
-      const m = PART.exec(name);
-      if (m && Number(m[1]) === pid && cuesAt(path.join(home, name, "cues.json"))) return path.join(home, name);
+    for (const entry of entries) {
+      const m = PART.exec(entry.name);
+      if (m && entry.isDirectory() && Number(m[1]) === pid && cuesAt(path.join(home, entry.name, "cues.json"))) return path.join(home, entry.name);
     }
   }
   return null;
@@ -588,7 +595,8 @@ function halfDone(target, pid) {
 // only when it is that run's, as its cues.json records it, and an earlier
 // file only to a place that is free; whatever cannot move stays where it is.
 function putBack(target, work) {
-  const fresh = cuesAt(path.join(work, "cues.json"));
+  const fresh = isFolder(work) ? cuesAt(path.join(work, "cues.json")) : null;
+  if (!fresh) return;
   const sha = fresh.sha256 && typeof fresh.sha256 === "object" ? fresh.sha256 : {};
   try {
     for (const name of NAMES.filter((n) => n !== "cues.json")) {
@@ -597,7 +605,7 @@ function putBack(target, work) {
       if (s && s.isFile() && !lstat(path.join(work, name)) && typeof sha[name] === "string" && digest(there) === sha[name]) rename(there, path.join(work, name));
     }
     const old = path.join(work, ".old");
-    const names = lstat(old) ? fs.readdirSync(old) : [];
+    const names = isFolder(old) ? fs.readdirSync(old) : [];
     let all = true;
     for (const name of [...names.filter((n) => n !== "cues.json"), ...names.filter((n) => n === "cues.json")]) {
       if (NAMES.includes(name) && !lstat(path.join(target, name))) rename(path.join(old, name), path.join(target, name));
