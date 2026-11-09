@@ -358,8 +358,11 @@ function estimateTempo(feat, from, to, { bpm: forced } = {}) {
     const value = comb(acf, bpm);
     if (value > best.value) best = { bpm, value };
   }
-  // Refine to a hundredth of a beat per minute.
-  for (let bpm = best.bpm - 0.1; bpm <= best.bpm + 0.1; bpm += 0.01) {
+  // Refine to a hundredth of a beat per minute, around where the search
+  // found it: where the curve has no peak, as a steady tone has none, a
+  // bound that moved with the best would climb without end.
+  const around = best.bpm;
+  for (let bpm = around - 0.1; bpm <= around + 0.1; bpm += 0.01) {
     const value = comb(acf, bpm);
     if (value > best.value) best = { bpm, value };
   }

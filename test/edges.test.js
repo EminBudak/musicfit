@@ -135,6 +135,22 @@ test("a silent track is refused with a reason", () => {
   assert.equal(read.status, 0, read.stderr);
 });
 
+test("a steady tone, which has no onsets for the tempo search to peak on, finishes: an analysis and a fit of it end in moments", () => {
+  // The way people and assistants make a track to try a tool with.
+  const tone = path.join(dir, "tone-440hz.wav");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:r=48000:d=10", "-c:a", "pcm_s16le", tone], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  // In a process of its own, with a limit: the search would never give the
+  // thread back to a test's own timer.
+  const run = (args) => spawnSync(process.execPath, [CLI, tone, ...args], { encoding: "utf8", timeout: 60000 });
+  const read = run(["--analyze", "--out", outDir("tone-read")]);
+  assert.equal(read.status, 0, `${read.signal} ${read.stderr}`);
+  assert.match(read.stdout, /Read tone-440hz\.wav: 10\.00 s, no steady beat/);
+  const fitted = run(["--length", "12", "--out", outDir("tone-fit")]);
+  assert.equal(fitted.status, 0, `${fitted.signal} ${fitted.stderr}`);
+  assert.match(fitted.stdout, /Fitted tone-440hz\.wav \(10\.00 s, no steady beat\) to 12\.00 s/);
+});
+
 test("a hit in the last half second is refused, since it would not be heard", () => {
   const run = spawnSync(process.execPath, [CLI, "any.mp3", "--length", "10", "--hit", "9.8"], { encoding: "utf8" });
   assert.equal(run.status, 2);
