@@ -251,7 +251,10 @@ function sealed(c) {
 const digests = new Map();
 function digest(at) {
   const id = identity(at);
-  const known = digests.get(at);
+  // By its full path: a run looks at its out folder as the user named it
+  // and as the absolute path, and a long file takes a second to read.
+  const key = path.resolve(at);
+  const known = digests.get(key);
   if (id !== null && known && known.id === id) return known.hex;
   const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
   let fd;
@@ -262,7 +265,7 @@ function digest(at) {
     const block = Buffer.allocUnsafe(1 << 20);
     for (let n; (n = fs.readSync(fd, block, 0, block.length, null)); ) sum.update(block.subarray(0, n));
     const hex = sum.digest("hex");
-    digests.set(at, { id, hex });
+    digests.set(key, { id, hex });
     return hex;
   } catch {
     return null;

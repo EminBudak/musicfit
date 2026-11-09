@@ -593,6 +593,26 @@ test("cues.json gives the size and the SHA-256 of each file the run wrote beside
   check(read, ["FIT.md", "seams.png"]);
 });
 
+test("an earlier file is read once in a run, whether its folder is named as the user gave it or by its full path, so no long hash holds the main thread later on", () => {
+  const folder = goodFit("read-once");
+  const named = path.relative(process.cwd(), folder);
+  assert.notEqual(named, folder);
+  const names = ["FIT.md", "cues.json", "fitted.wav", "mix.wav", "seams.png"];
+  out.claim(named, names);
+  const real = fs.openSync;
+  const opened = [];
+  try {
+    fs.openSync = (at, ...rest) => {
+      opened.push(path.basename(String(at)));
+      return real(at, ...rest);
+    };
+    assert.deepEqual(out.earlier(path.resolve(named)).sort(), names);
+  } finally {
+    fs.openSync = real;
+  }
+  assert.deepEqual(opened.filter((name) => name !== "cues.json"), []);
+});
+
 test("a file changed since the run wrote it is the user's, though it kept its size, and so is a cues.json changed by hand", () => {
   const { file } = fixture("house");
   const folder = goodFit("same-size");
