@@ -40,13 +40,15 @@ const LOCK_BARE = 5 * 1000;
 
 const lstat = (at) => fs.lstatSync(at, { throwIfNoEntry: false });
 
-const WHY = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "the disk is read-only", ENOTDIR: "a file is in the way", ENOSPC: "the disk is full", EDQUOT: "the disk quota is used up" };
+const WHY = { EACCES: "permission denied", EPERM: "permission denied", EROFS: "the disk is read-only", ENOTDIR: "a file is in the way", ENOSPC: "the disk is full", EDQUOT: "the disk quota is used up", ENAMETOOLONG: "its name is too long" };
 
 // Whether the folder to write to can be made, checked before any work so a
 // run does not fail at its end over it (and so a recursive mkdir is never
 // tried where it does not return, such as /proc): the nearest folder that
-// exists has to be one, and writable. A link to a folder that is not there
-// on the way is refused, and so is a drive or a share that is not there.
+// exists has to be one, and one this user may write in and enter. A link to
+// a folder that is not there on the way is refused, and so is a drive or a
+// share that is not there, a folder on the way that may not be entered, and
+// a name too long for the disk.
 function writable(dir) {
   let at = path.resolve(dir);
   // A folder on the way, named as the user named the out folder.
@@ -55,8 +57,10 @@ function writable(dir) {
     let s = null;
     try {
       s = fs.lstatSync(at);
-    } catch {
-      // Not there, or a file on the way, which is told below.
+    } catch (err) {
+      // Not there, or a file on the way, which is told below. Anything else
+      // would fail the run just the same once it has done its work.
+      if (err.code !== "ENOENT" && err.code !== "ENOTDIR") throw new Error(`Cannot write to ${dir}: ${plainly(err)}`);
     }
     if (s && s.isSymbolicLink()) throw new Error(`Cannot write to ${dir}: ${named(at)} is a link to ${fs.readlinkSync(at)}, which is not there`);
     const up = path.dirname(at);
@@ -65,7 +69,7 @@ function writable(dir) {
   }
   try {
     if (!fs.statSync(at).isDirectory()) throw Object.assign(new Error(`${at} is a file`), { code: "ENOTDIR" });
-    fs.accessSync(at, fs.constants.W_OK);
+    fs.accessSync(at, fs.constants.W_OK | fs.constants.X_OK);
   } catch (err) {
     throw new Error(`Cannot write to ${dir}: ${WHY[err.code] || err.message}`);
   }

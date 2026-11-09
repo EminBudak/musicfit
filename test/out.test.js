@@ -1482,6 +1482,28 @@ test("a run that has put its files in place ends well, though a dead run's hidde
   }
 });
 
+test("an out folder whose name is too long, or below a folder that may not be entered, is refused before any work", { skip: notRoot.skip }, () => {
+  const { file } = fixture("house");
+  const long = path.join(dir, "a".repeat(300));
+  const named = cli([file, "--length", "12", "--out", long]);
+  assert.equal(named.status, 1);
+  assert.equal(named.stderr, `musicfit: Cannot write to ${long}: its name is too long\n`);
+  // May be written in, not entered: nothing can be made in it.
+  const locked = path.join(dir, "locked-out");
+  fs.mkdirSync(locked);
+  fs.chmodSync(locked, 0o600);
+  try {
+    for (const at of [locked, path.join(locked, "sub"), path.join(locked, "sub", "deeper")]) {
+      const run = cli([file, "--length", "12", "--out", at]);
+      assert.equal(run.status, 1, at);
+      assert.equal(run.stderr, `musicfit: Cannot write to ${at}: permission denied\n`);
+    }
+  } finally {
+    fs.chmodSync(locked, 0o755);
+  }
+  assert.deepEqual(fs.readdirSync(locked), []);
+});
+
 test("the earlier files a run says it removes are read after the takeover of a run killed in that folder's commit, so what the takeover brings back goes too", async () => {
   const folder = goodFit("removes-after-kill");
   const writes = ["fitted.wav", "cues.json", "seams.png", "FIT.md"];
