@@ -1322,6 +1322,48 @@ test("in a folder musicfit 0.1 wrote, a file counts as its own only while it loo
   assert.match(other.stderr, /fitted\.wav is not the fitted\.wav musicfit wrote there/);
 });
 
+// A run killed in the moment it moved its files in: its hidden folder with
+// its new files and its cues.json, and in .old the earlier cues.json and
+// fitted.wav, moved aside; its new fitted.wav moved in; its lock, naming its
+// process, which is gone.
+async function cutShort(folder, dead = deadPid()) {
+  const work = path.join(folder, `.musicfit-part-${dead}-0badc0de`);
+  fs.mkdirSync(path.join(work, ".old"), { recursive: true });
+  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(work, name), `killed run's ${name}\n`);
+  await out.record({ file: (name) => path.join(work, name) }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
+  for (const name of ["cues.json", "fitted.wav"]) fs.renameSync(path.join(folder, name), path.join(work, ".old", name));
+  fs.renameSync(path.join(work, "fitted.wav"), path.join(folder, "fitted.wav"));
+  fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${dead}\n`);
+  return work;
+}
+
+test("the hidden folder of a run killed as it moved its files in waits for the next run in its own out folder: a run that ends well inside it or beside it does not sweep the earlier files away", async () => {
+  const { file } = fixture("house");
+  const folder = goodFit("cut-short-swept");
+  const before = snapshot(folder);
+  const work = await cutShort(folder);
+  age(work, 20);
+  // A run in a folder inside it sweeps that folder as it ends.
+  const inner = path.join(folder, "stems");
+  const nested = cli([file, "--length", "12", "--out", inner]);
+  assert.equal(nested.status, 0, nested.stderr);
+  assert.ok(fs.existsSync(path.join(work, ".old", "cues.json")), "the earlier files went with the hidden folder");
+  // One beside the out folder sweeps the folder that holds it: here, a run
+  // killed before its out folder was there, so its hidden folder is beside it.
+  const parent = path.join(dir, "cut-short-parent");
+  const beside = path.join(parent, `.musicfit-part-${deadPid()}-0badc0de`);
+  fs.mkdirSync(path.join(beside, ".old"), { recursive: true });
+  fs.writeFileSync(path.join(beside, "cues.json"), JSON.stringify({ musicfit: "test" }));
+  age(beside, 20);
+  const sibling = cli([file, "--length", "12", "--out", path.join(parent, "sibling")]);
+  assert.equal(sibling.status, 0, sibling.stderr);
+  assert.ok(fs.existsSync(beside), "the hidden folder of the killed run beside it went");
+  // The next run in the out folder itself puts the earlier files back first.
+  fs.rmSync(inner, { recursive: true });
+  out.claim(folder, ["fitted.wav", "mix.wav", "cues.json", "seams.png", "FIT.md"]);
+  assert.deepEqual(snapshot(folder), before);
+});
+
 test("a link named like a killed run's hidden folder, next to its lock, is never followed: no file of the out folder goes through it", posix, () => {
   const folder = goodFit("half-done-link");
   const elsewhere = path.join(dir, "half-done-elsewhere");
@@ -1344,17 +1386,7 @@ test("a run killed in the moment it moved its files in is undone by the next run
   const { file } = fixture("house");
   const folder = goodFit("killed-mid-commit");
   const before = snapshot(folder);
-  // The killed run's hidden folder: its new files and its cues.json, and in
-  // .old the earlier cues.json and fitted.wav, moved aside; its new
-  // fitted.wav moved in; its lock, naming its process, which is gone.
-  const dead = deadPid();
-  const work = path.join(folder, `.musicfit-part-${dead}-0badc0de`);
-  fs.mkdirSync(path.join(work, ".old"), { recursive: true });
-  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(work, name), `killed run's ${name}\n`);
-  await out.record({ file: (name) => path.join(work, name) }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
-  for (const name of ["cues.json", "fitted.wav"]) fs.renameSync(path.join(folder, name), path.join(work, ".old", name));
-  fs.renameSync(path.join(work, "fitted.wav"), path.join(folder, "fitted.wav"));
-  fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${dead}\n`);
+  await cutShort(folder);
   // A run refused once it has begun, for a video of another length, finds
   // the folder as it was before the killed run, and leaves it so.
   const film = path.join(dir, "killed-mid-commit.mp4");
@@ -1365,12 +1397,7 @@ test("a run killed in the moment it moved its files in is undone by the next run
   assert.match(refused.stderr, /killed-mid-commit\.mp4 is 5\.00 s long/);
   assert.deepEqual(snapshot(folder), before);
   // The same state again, and a run that ends well.
-  fs.mkdirSync(path.join(work, ".old"), { recursive: true });
-  for (const name of ["fitted.wav", "seams.png", "FIT.md"]) fs.writeFileSync(path.join(work, name), `killed run's ${name}\n`);
-  await out.record({ file: (name) => path.join(work, name) }, { musicfit: "test", file: "fitted.wav", mix: null, video: null });
-  for (const name of ["cues.json", "fitted.wav"]) fs.renameSync(path.join(folder, name), path.join(work, ".old", name));
-  fs.renameSync(path.join(work, "fitted.wav"), path.join(folder, "fitted.wav"));
-  fs.writeFileSync(path.join(folder, out.LOCK), `${require("node:os").hostname()} ${dead}\n`);
+  await cutShort(folder);
   const run = cli([file, "--length", "12", "--out", folder]);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, new RegExp(`Note    This run removed the earlier fit's mix\\.wav from ${quote(folder)}, as it does not write one\\.`));

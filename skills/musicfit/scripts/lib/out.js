@@ -918,10 +918,18 @@ function touched(folder) {
   return newest;
 }
 
+// Whether a hidden folder is that of a run killed while it moved its files
+// in: its commit had begun, as .old is made first, and had not ended, as its
+// cues.json goes in last. The earlier files wait there, and only the next
+// run in its own out folder knows where they belong (takeOver()).
+const cutShort = (work) => isFolder(path.join(work, ".old")) && Boolean(lstat(path.join(work, "cues.json")));
+
 // Removes the hidden folders of runs killed outright: their process is
 // gone and nothing in them has changed for STALE. Nothing in one is put
 // back: the run that ends well here has made the folder what it should be.
-// One whose earlier files a message sent the user to keeps them.
+// One whose earlier files a message sent the user to keeps them, and so does
+// one cut short while it moved its files in, which this run may not be the
+// one to put back.
 function sweep(folder) {
   let entries = [];
   try {
@@ -933,7 +941,7 @@ function sweep(folder) {
     const m = PART.exec(entry.name);
     if (!m || !entry.isDirectory()) continue;
     const at = path.join(folder, entry.name);
-    if (running(Number(m[1])) || Date.now() - touched(at) < STALE || lstat(path.join(at, KEPT))) continue;
+    if (running(Number(m[1])) || Date.now() - touched(at) < STALE || lstat(path.join(at, KEPT)) || cutShort(at)) continue;
     remove(at);
   }
 }
