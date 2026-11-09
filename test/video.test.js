@@ -1125,18 +1125,31 @@ function filmSounds(name, sounds) {
 
 const silence = () => wav("silence", 12, () => {});
 
-test("a video with more than one sound stream: sound in a later one under a silent first is refused until the user chooses, and a run that goes on says only the first is read", () => {
+test("a video with more than one sound stream: sound in a later one under a silent first is refused with keep and voice too, drop goes on without it, and a run that goes on says only the first is read", () => {
   const { file } = fixture("house");
   const twoStreams = filmSounds("two-streams", [silence(), speech()]);
-  // Nothing to hear in the first, a voice in the second: asked, before any work.
+  // Nothing to hear in the first, a voice in the second: refused before any
+  // work, as keep and voice would read only the silent first stream.
   const out = at("two-streams-fit");
-  const refused = cli([file, "--length", "12", "--video", twoStreams, "--out", out]);
-  assert.equal(refused.status, 1, refused.stderr);
-  assert.match(refused.stderr, /musicfit: two-streams\.mp4 has 2 sound streams and musicfit reads only the first, which is silent or nearly so, while number 2 plays for \d+\.\d of its 12\.0 s: give --video a copy with that sound first, or --video-sound drop to go on without it\n$/);
-  assert.ok(!fs.existsSync(out));
+  for (const how of [[], ["--video-sound", "keep"], ["--video-sound", "voice"]]) {
+    const refused = cli([file, "--length", "12", "--video", twoStreams, ...how, "--out", out]);
+    assert.equal(refused.status, 1, `${how}: ${refused.stderr}`);
+    assert.match(refused.stderr, /musicfit: two-streams\.mp4 has 2 sound streams and musicfit reads only the first, which is silent or nearly so, while number 2 plays for \d+\.\d of its 12\.0 s: give --video a copy with that sound first, or --video-sound drop to go on without it\n$/);
+    assert.ok(!fs.existsSync(out));
+  }
+  // Left out on purpose: no stream is read, so nothing is said of them.
+  const dropped = cli([file, "--length", "12", "--video", twoStreams, "--video-sound", "drop", "--out", at("two-streams-drop")]);
+  assert.equal(dropped.status, 0, dropped.stderr);
+  assert.doesNotMatch(dropped.stdout, /sound streams/);
+  // Sound in the first: asked as for any video, and with no sound in the
+  // others none of them is refused for it.
+  const firstSounds = filmSounds("first-sounds", [speech(), silence()]);
+  const inFirst = cli([file, "--length", "12", "--video", firstSounds, "--out", at("first-sounds-fit")]);
+  assert.equal(inFirst.status, 1);
+  assert.match(inFirst.stderr, /first-sounds\.mp4 has sound of its own for \d+\.\d of its 12\.0 s, so say what becomes of it with --video-sound/);
   // The user chose: a note says what is not in video.mp4, in all three places.
-  const note = "two-streams.mp4 has 2 sound streams and only the first is read: what the others hold is not in video.mp4.";
-  const kept = cli([file, "--length", "12", "--video", twoStreams, "--video-sound", "keep", "--out", out]);
+  const note = "first-sounds.mp4 has 2 sound streams and only the first is read: what the others hold is not in video.mp4.";
+  const kept = cli([file, "--length", "12", "--video", firstSounds, "--video-sound", "keep", "--out", out]);
   assert.equal(kept.status, 0, kept.stderr);
   assert.ok(kept.stdout.includes(`\n  Note    ${note}\n`), kept.stdout);
   assert.ok(cuesOf(out).warnings.includes(note));
@@ -1144,15 +1157,6 @@ test("a video with more than one sound stream: sound in a later one under a sile
   // video.mp4 holds one sound stream, and its picture.
   const listed = spawnSync(FFMPEG, ["-hide_banner", "-nostdin", "-i", path.join(out, "video.mp4")], { encoding: "utf8" }).stderr;
   assert.equal(listed.match(/Stream #0:\d+.*: Audio: /g).length, 1);
-  // Left out on purpose: nothing to say about streams none of which is read.
-  const dropped = cli([file, "--length", "12", "--video", twoStreams, "--video-sound", "drop", "--out", at("two-streams-drop")]);
-  assert.equal(dropped.status, 0, dropped.stderr);
-  assert.doesNotMatch(dropped.stdout, /sound streams/);
-  // Sound in the first: asked as for any video, and with no sound in the
-  // others none of them is refused for it.
-  const inFirst = cli([file, "--length", "12", "--video", filmSounds("first-sounds", [speech(), silence()]), "--out", at("first-sounds-fit")]);
-  assert.equal(inFirst.status, 1);
-  assert.match(inFirst.stderr, /first-sounds\.mp4 has sound of its own for \d+\.\d of its 12\.0 s, so say what becomes of it with --video-sound/);
   const quiet = cli([file, "--length", "12", "--video", filmSounds("all-silent", [silence(), silence()]), "--out", at("all-silent-fit")]);
   assert.equal(quiet.status, 0, quiet.stderr);
   assert.match(quiet.stdout, /Note {4}all-silent\.mp4 has 2 sound streams and only the first is read/);

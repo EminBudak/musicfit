@@ -171,8 +171,10 @@ async function readVideo(track, o) {
   const playing = async (x, stands) => ((await floorOf(x)) > -40 ? o.length : seconds(stands));
   const plays = own ? await playing(own, heard) : 0;
   // Sound in a later stream, under a first with none to speak of, is the
-  // video's own sound too, and would be left out without a word.
-  if (sound === undefined && !(plays > 0)) {
+  // video's own sound too, and would be left out: whatever --video-sound
+  // says of it, keep and voice read only the first, so the run stops before
+  // any work. With drop, none is read and the run never comes here.
+  if (!(plays > 0)) {
     for (let k = 1; k < picture.sounds; k++) {
       let other = null;
       try {
