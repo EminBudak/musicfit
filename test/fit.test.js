@@ -157,6 +157,61 @@ test("a fit too short for the track's opening and its ending both can start late
   assert.doesNotMatch(md, /as the track does/);
 });
 
+// The offbeat fixture cut one second after its last hit, with a short fade,
+// as a music model's track can end: its ring-out runs to the end of the file.
+let shortRing = null;
+async function ringsToTheEnd() {
+  if (shortRing) return shortRing;
+  const { file: whole, truth } = fixture("offbeat");
+  const x = await decode(whole, { rate: RATE, channels: 2 });
+  const n = Math.round((truth.finalHit + 1) * RATE);
+  const L = new Float32Array(n);
+  const R = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const g = Math.min(1, (n - i) / (0.2 * RATE));
+    L[i] = x[2 * i] * g;
+    R[i] = x[2 * i + 1] * g;
+  }
+  const file = outDir("rings-to-the-end.wav");
+  writeWav(file, { rate: RATE, L, R });
+  shortRing = { file, seconds: n / RATE, truth };
+  return shortRing;
+}
+
+test("a fit as long as the track plays the track, with no bar skipped and no silence at the end, though its ring-out misses the end by a rounding", async () => {
+  const { file, seconds, truth } = await ringsToTheEnd();
+  for (const length of [seconds, seconds - 0.04, seconds - 0.3]) {
+    const out = outDir(`own-length-${length}`);
+    const { cues } = await fit(file, { ...defaults, length, out });
+    assert.equal(cues.seams.length, 0, `${length}: ${JSON.stringify(cues.segments)}`);
+    assert.deepEqual(cues.segments.map((s) => s.sourceBars), [[1, 17]], String(length));
+    assert.equal(cues.end.kind, "natural", String(length));
+    assert.ok(Math.abs(cues.end.finalHit.time - truth.finalHit) < 0.02, `${length}: last hit at ${cues.end.finalHit.time}`);
+    const row = fs.readFileSync(path.join(out, "FIT.md"), "utf8").split("\n").find((l) => / \| end \| /.test(l));
+    assert.doesNotMatch(row, /silent/, String(length));
+    // A ring-out past the end by a rounding stops there; more of it, still heard, is faded to the end.
+    if (length === seconds) assert.match(row, /ringing out on its own/);
+    if (length === seconds - 0.3) assert.match(row, /faded over its last/);
+    assert.equal((await decode(path.join(out, "fitted.wav"))).length / 2, Math.round(length * RATE), String(length));
+  }
+  // More of the ring-out would be lost than a beat, so the ending comes a bar earlier.
+  const short = await fit(file, { ...defaults, length: truth.finalHit + 0.3, out: outDir("own-length-short") });
+  assert.ok(short.cues.seams.length >= 1, JSON.stringify(short.cues.segments));
+});
+
+test("a fit that ends on the track's own ending with room to spare says how much of its end is silent", async () => {
+  const { file, seconds } = await ringsToTheEnd();
+  const out = outDir("own-length-more");
+  const length = seconds + 1;
+  const { cues } = await fit(file, { ...defaults, length, out });
+  assert.equal(cues.end.kind, "natural");
+  assert.equal(cues.seams.length, 0);
+  const left = length - cues.end.time;
+  assert.ok(left > 0.9, `the music ends at ${cues.end.time}`);
+  const md = fs.readFileSync(path.join(out, "FIT.md"), "utf8");
+  assert.ok(md.includes(`, ringing out on its own; the last ${left.toFixed(2)} s are silent |`), md);
+});
+
 test("a short fit of a track whose first bar comes a moment in starts later too, and FIT.md names the bar; a fit with a hit keeps its swell", async () => {
   const x = await decode(fixture("offbeat").file, { rate: RATE, channels: 2 });
   // A moment of sound before its first bar, as the end of a bar a music

@@ -381,13 +381,14 @@ function startText(c) {
 
 function endText(c) {
   const e = c.end;
+  // Silence left after the music has ended, said where it ends.
+  const silent = (ended) => (c.length - ended > 0.01 ? `; the last ${sec(c.length - ended)} are silent` : "");
   if (e.kind === "natural") {
     const faded = e.fade ? `, faded over its last ${sec(e.fade.to - e.fade.from)}` : ", ringing out on its own";
-    return `the track's own ending: its last hit at ${sec(e.finalHit.time)} (frame ${e.finalHit.frame})${faded}`;
+    return `the track's own ending: its last hit at ${sec(e.finalHit.time)} (frame ${e.finalHit.frame})${faded}${silent(e.time)}`;
   }
   if (c.mode === "energy" || !e.fade.onBeat) return `a ${sec(e.fade.to - e.fade.from)} fade to the end`;
-  const silence = c.length - e.fade.to;
-  return `a fade from the beat at ${sec(e.fade.from)} that ends on the beat at ${sec(e.fade.to)} (frame ${e.fade.toFrame})${silence > 0.01 ? `; the last ${sec(silence)} are silent` : ""}`;
+  return `a fade from the beat at ${sec(e.fade.from)} that ends on the beat at ${sec(e.fade.to)} (frame ${e.fade.toFrame})${silent(e.fade.to)}`;
 }
 
 function analysisMarkdown(c, { trackName }) {

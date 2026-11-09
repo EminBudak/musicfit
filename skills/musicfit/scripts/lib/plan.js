@@ -75,7 +75,18 @@ function plan(a, { length, hit, end = "auto", fade }) {
     if (!natural) return [];
     const room = Math.min(ringOut, Math.max(2 * beat, 1.2));
     const latest = Math.floor((length - room - hitInBar - head.q) / unit + 1e-9);
-    return [[latest, 0], [latest - 1, 0.6]].filter(([slot]) => slot >= 1 && (!drop || slot > head.dropSlot)).map(([slot, extra]) => ({ slot, extra }));
+    const ends = [[latest, 0], [latest - 1, 0.6]].map(([slot, extra]) => ({ slot, extra }));
+    // A fit as long as the track, within a bar, plays the track: the ending
+    // bar takes the slot it has there, with the bars before it in theirs,
+    // though the end of its ring-out misses by a rounding or does not fit,
+    // rather than a bar being skipped to bring it forward and silence left
+    // after it. No more than a beat of the ring-out may fall past the end,
+    // nor more than half of it.
+    const own = ending.bar - first;
+    const hitAt = drop ? hit + (ending.hit - drop.time) : head.q + (ending.hit - bars[first].start);
+    const lost = ringOut - (length - hitAt);
+    if (own > latest && Math.abs(length - a.duration) < unit && (!drop || head.dropSlot === drop.bar - first) && lost <= Math.min(beat, ringOut / 2)) ends.push({ slot: own, extra: 0, own: true });
+    return ends.filter(({ slot }) => slot >= 1 && (!drop || slot > head.dropSlot));
   };
   if (natural) {
     hitInBar = ending.hit - bars[ending.bar].start;
@@ -193,14 +204,14 @@ function plan(a, { length, hit, end = "auto", fade }) {
 
   let best = null;
   for (const head of heads) {
-    const options = endsFor(head).map((e) => ({ slots: e.slot + 1, endSlot: e.slot, extra: e.extra }));
+    const options = endsFor(head).map((e) => ({ slots: e.slot + 1, endSlot: e.slot, extra: e.extra, own: e.own }));
     if (!options.length) options.push({ slots: Math.max(1, Math.ceil((length - head.q) / unit - 1e-9)), endSlot: -1, extra: 0 });
     for (const o of options) {
       if (drop && head.dropSlot >= o.slots) continue;
       const found = search(o.slots, o.endSlot, head.dropSlot);
       if (!found) continue;
       const total = found.total + o.extra + head.extra;
-      if (!best || total < best.score) best = { ...found, score: total, head, endSlot: o.endSlot };
+      if (!best || total < best.score) best = { ...found, score: total, head, endSlot: o.endSlot, own: o.own };
     }
   }
   // When the ending of its own fits nowhere, a fade.
@@ -267,6 +278,12 @@ function plan(a, { length, hit, end = "auto", fade }) {
     tail.hit = lastSeg.outStart + (ending.hit - lastSeg.srcStart);
     tail.ringOut = ringOut;
     lastSeg.srcEnd = ending.tailEnd;
+    // In the slot it has in the track, a ring-out that runs past the end by
+    // a rounding, or only where nobody hears it, stops there as it would
+    // have stopped, with no fade over what can be heard. A millisecond
+    // short, so the samples of the rounded times cannot pass the end.
+    const left = lastSeg.srcStart + length - lastSeg.outStart;
+    if (best.own && left >= Math.min(ending.audibleEnd, ending.tailEnd - 0.02)) lastSeg.srcEnd = Math.min(ending.tailEnd, left - 0.001);
   } else {
     tail.kind = "fade";
     tail.fade = fade;
