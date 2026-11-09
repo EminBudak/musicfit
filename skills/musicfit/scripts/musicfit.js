@@ -65,6 +65,11 @@ newer and ffmpeg 4.4 or newer; set FFMPEG_PATH to pick the ffmpeg.`;
 
 const VALUED = new Set(["--length", "--hit", "--drop", "--fps", "--voice", "--duck", "--video", "--video-sound", "--lufs", "--end", "--fade", "--bpm", "--meter", "--out"]);
 
+// A number as people write it. Number() also reads a blank as 0, and takes
+// hex and exponents, none of which anyone means here: those read as no number,
+// and each flag refuses it in its own words.
+const number = (value) => (/^[-+]?(?:\d+\.?\d*|\.\d+)$/.test(String(value).trim()) ? Number(value) : NaN);
+
 function parseFps(value) {
   const m = /^(\d+(?:\.\d+)?)(?:\/(\d+(?:\.\d+)?))?$/.exec(value);
   const fps = m ? Number(m[1]) / (m[2] ? Number(m[2]) : 1) : NaN;
@@ -129,11 +134,11 @@ function parse(argv) {
   }
   if (raw.out !== undefined) options.out = raw.out;
   if (raw.duck !== undefined) {
-    options.duck = Math.abs(Number(raw.duck));
+    options.duck = Math.abs(number(raw.duck));
     if (!(options.duck >= 0 && options.duck <= 40)) throw new Error("--duck takes 0 to 40 dB");
   }
   if (raw.lufs !== undefined) {
-    options.lufs = Number(raw.lufs);
+    options.lufs = number(raw.lufs);
     if (!(options.lufs >= -40 && options.lufs <= -5)) throw new Error("--lufs takes -40 to -5, for example -14 or -16");
   }
   if (raw.end !== undefined) {
@@ -141,11 +146,11 @@ function parse(argv) {
     if (!["auto", "natural", "fade"].includes(options.end)) throw new Error("--end takes auto, natural or fade");
   }
   if (raw.bpm !== undefined) {
-    options.bpm = Number(raw.bpm);
+    options.bpm = number(raw.bpm);
     if (!(options.bpm >= 40 && options.bpm <= 250)) throw new Error("--bpm takes 40 to 250");
   }
   if (raw.meter !== undefined) {
-    options.meter = Number(String(raw.meter).split("/")[0]);
+    options.meter = number(String(raw.meter).split("/")[0]);
     if (![2, 3, 4, 6].includes(options.meter)) throw new Error("--meter takes 3 or 4 (also 2 or 6)");
   }
   if (!options.analyze && raw.length === undefined) throw new Error("Give --length, the length of your cut, or --analyze to only read the track");
