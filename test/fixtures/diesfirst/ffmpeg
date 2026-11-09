@@ -1,13 +1,16 @@
 #!/bin/sh
 # Ctrl-C reaches the whole process group: this ffmpeg, which writes a WAV,
-# ends at once, as ffmpeg does on SIGINT, and node hears its own SIGINT a
-# moment later, once it has taken in that ffmpeg failed. The SIGINT comes
-# from a process that holds none of ffmpeg's pipes, so they close now.
+# or with $MUSICFIT_TEST_DIES set to readback reads video.mp4 back, ends at
+# once, as ffmpeg does on SIGINT at -v error: it says nothing and exits with
+# 255. node hears its own SIGINT a moment later, once it has taken in that
+# ffmpeg failed. The SIGINT comes from a process that holds none of
+# ffmpeg's pipes, so they close now.
+prev=
 for arg do
-  if [ "$arg" = pcm_s24le ]; then
+  if { [ "$MUSICFIT_TEST_DIES" != readback ] && [ "$arg" = pcm_s24le ]; } || { [ "$MUSICFIT_TEST_DIES" = readback ] && [ "$prev" = -map ] && [ "$arg" = 0 ]; }; then
     (sleep 0.3; kill -INT $PPID) </dev/null >/dev/null 2>&1 &
-    echo "Exiting normally, received signal 2." >&2
     exit 255
   fi
+  prev=$arg
 done
 exec ffmpeg "$@"

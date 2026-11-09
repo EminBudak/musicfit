@@ -492,19 +492,26 @@ test("while a track is analysed the run is free to hear a stop: the analysis has
   assert.equal(a.distance(1, 5), alone.distance(1, 5));
 });
 
-test("a stop whose ffmpeg ended a moment before it, as with Ctrl-C to the whole group, is still said and ends by that signal", posix, async () => {
-  const out = goodFit("dies-first");
-  const before = snapshot(out);
-  const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", "--out", out, "--json"], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "diesfirst", "ffmpeg") } });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (d) => (stdout += d));
-  child.stderr.on("data", (d) => (stderr += d));
-  const [code, signal] = await new Promise((resolve) => child.on("exit", (...end) => resolve(end)));
-  assert.equal(signal, "SIGINT", `${code} ${stderr}`);
-  assert.match(stderr, new RegExp(`musicfit: stopped, so ${quote(out)} is as it was\n$`));
-  assert.deepEqual(JSON.parse(stdout), { ok: false, error: `stopped, so ${out} is as it was` });
-  assert.deepEqual(snapshot(out), before);
+test("a stop whose ffmpeg ended a moment before it, as with Ctrl-C to the whole group, is still said and ends by that signal, also while video.mp4 is read back", posix, async () => {
+  const film = path.join(dir, "dies-first.mp4");
+  const made = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=14", "-c:v", "mpeg4", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  // ffmpeg stopped by Ctrl-C at -v error says nothing and exits with 255:
+  // writing fitted.wav, and reading video.mp4 back.
+  for (const [dies, video] of [["wav", []], ["readback", ["--video", film]]]) {
+    const out = goodFit(`dies-first-${dies}`);
+    const before = snapshot(out);
+    const child = spawn(process.execPath, [CLI, fixture("house").file, "--length", "14", ...video, "--out", out, "--json"], { env: { ...process.env, FFMPEG_PATH: path.join(FIXTURES, "diesfirst", "ffmpeg"), MUSICFIT_TEST_DIES: dies } });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    const [code, signal] = await new Promise((resolve) => child.on("exit", (...end) => resolve(end)));
+    assert.equal(signal, "SIGINT", `${dies}: ${code} ${stderr}`);
+    assert.match(stderr, new RegExp(`musicfit: stopped, so ${quote(out)} is as it was\n$`), dies);
+    assert.deepEqual(JSON.parse(stdout), { ok: false, error: `stopped, so ${out} is as it was` }, dies);
+    assert.deepEqual(snapshot(out), before, dies);
+  }
 });
 
 test("a process that exits with a run not ended takes its hidden folder with it", () => {

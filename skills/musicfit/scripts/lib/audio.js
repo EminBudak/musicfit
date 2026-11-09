@@ -43,6 +43,15 @@ const WRONG = /error|\b(invalid|unable|cannot|can't|could not|couldn't|failed|no
 // What ffmpeg says of its input and output on the way, for a run that names no error.
 const INFO = /^(Input|Output) #\d|^Stream (mapping|#)|^Guessed Channel Layout|^Estimating duration|^Duration:|^Metadata:|^Press \[q\]|^(size|frame)=|^Summary:$/;
 
+// Whether ffmpeg was stopped by a signal: one it did not catch, or one it
+// caught, as Ctrl-C, after which it exits with 255. At -v info it then says
+// "Exiting normally, received signal N."; at -v error it says nothing at
+// all. ffmpeg 7 and newer also exit with 255 when the system refuses an
+// operation, but they say so first.
+function stopped(stderr, code, signal) {
+  return Boolean(signal) || /received signal \d+/.test(stderr || "") || (code === 255 && !String(stderr || "").trim());
+}
+
 // Why ffmpeg failed, from what it printed: the last line that names an
 // error once the closing lines and the indented ones (a summary, the
 // streams) are left out, without the "[name @ 0x...]" that starts it; else
@@ -52,6 +61,7 @@ function reason(stderr, code, signal) {
   // ffmpeg stopped by a signal it caught, as Ctrl-C.
   const caught = /received signal (\d+)/.exec(stderr || "");
   if (caught) return `ffmpeg was stopped (signal ${caught[1]})`;
+  if (stopped(stderr, code, signal)) return "ffmpeg was stopped";
   const lines = String(stderr || "")
     .split(/\r?\n|\r/)
     .filter((line) => line.trim() && !/^\s/.test(line))
@@ -106,7 +116,7 @@ function run(args, input) {
       running.delete(child);
       const stderr = Buffer.concat(err).toString("utf8");
       if (code === 0 && !UNFINISHED.test(stderr)) resolve({ chunks: out, stderr });
-      else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr, signal }));
+      else reject(Object.assign(new Error(reason(stderr, code, signal)), { stderr, signal, stopped: stopped(stderr, code, signal) }));
     });
     if (input) {
       // ffmpeg may stop reading early when it fails; the error that follows

@@ -61,6 +61,10 @@ test("the line that says why is found in what ffmpeg 4.4 and 8 print", () => {
   // Stopped by a signal it caught, as Ctrl-C to the whole process group.
   assert.equal(reason("Exiting normally, received signal 2.\n", 255), "ffmpeg was stopped (signal 2)");
   assert.equal(reason("", null, "SIGKILL"), "ffmpeg was stopped (SIGKILL)");
+  // At -v error a caught signal leaves no line at all, only the exit code
+  // 255, which ffmpeg 7 and newer also give a refused operation, with a line.
+  assert.equal(reason("", 255), "ffmpeg was stopped");
+  assert.equal(reason("[out#0/wav @ 0x5970b98c6a00] Error opening output fitted.wav: Operation not permitted\n", 255), "ffmpeg: Error opening output fitted.wav: Operation not permitted");
 });
 
 test("fitted.wav and mix.wav say nothing of the ffmpeg that wrote them, so any ffmpeg writes the same bytes", async () => {

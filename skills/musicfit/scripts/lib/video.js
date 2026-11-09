@@ -249,7 +249,7 @@ async function mux(file, sound, out, { picture, comment, start }) {
     const { stderr } = await run(["-v", "error", "-i", where(out), "-map", "0", "-c", "copy", "-f", "null", "-"]);
     if (DAMAGED.some((line) => line.test(stderr))) why = "it is cut short";
   } catch (err) {
-    if (err.signal || /received signal \d+/.test(err.stderr || "")) throw err;
+    if (err.stopped) throw err;
     why = err.message.replace(/^ffmpeg: /, "").split(`${where(out)}: `).join("");
   }
   if (why) throw new Error(`The video.mp4 this run wrote cannot be read back (${why}), so it was not put in place`);

@@ -282,7 +282,7 @@ async function main() {
     // end before this process hears its own signal: an ffmpeg that a
     // signal stopped gives that signal a moment to come. A stopped run has
     // said so and ends by it.
-    if (err.signal || /received signal \d+/.test(err.stderr || "")) await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (err.stopped) await new Promise((resolve) => setTimeout(resolve, 1000));
     if (stopping) return;
     fail(err.message, 1);
   }
