@@ -13,6 +13,15 @@ const { CHUNK, breathe } = require("./breathe");
 
 const RATE = 48000;
 
+// A name made whole from the folder musicfit was started in. path.resolve
+// works out a .. by its letters, while the system goes up from wherever a
+// link on the way leads, so a name with a .. in it keeps it. Windows goes by
+// the letters too.
+function whole(name) {
+  if (process.platform === "win32" || !name.split("/").includes("..")) return path.resolve(name);
+  return path.isAbsolute(name) ? name : `${process.cwd()}/${name}`;
+}
+
 // A path with folders in it is read from where musicfit was started, also
 // for a call that runs ffmpeg in another folder.
 function ffmpegPath() {
@@ -22,12 +31,22 @@ function ffmpegPath() {
 }
 
 // The environment for a call run in another folder: a relative entry of PATH
-// reads from that folder when ffmpeg is looked up, so every entry is written
-// from where musicfit was started. An empty entry is the current folder.
+// reads from that folder when ffmpeg is looked up, so that entry is written
+// from where musicfit was started, and the others stay as they are. An empty
+// entry is the current folder too. Windows passes over an empty entry, takes
+// one in quotes, which may hold a ; of its own, and the variable's name in
+// any case.
 function fromHere() {
-  const key = Object.keys(process.env).find((name) => name.toUpperCase() === "PATH");
-  if (!key) return process.env;
-  return { ...process.env, [key]: process.env[key].split(path.delimiter).map((entry) => path.resolve(entry)).join(path.delimiter) };
+  const windows = process.platform === "win32";
+  const { delimiter, isAbsolute } = windows ? path.win32 : path.posix;
+  const key = windows ? Object.keys(process.env).find((name) => name.toUpperCase() === "PATH") : "PATH";
+  if (!key || process.env[key] === undefined) return process.env;
+  const entries = windows ? process.env[key].match(/(?<=^|;)("[^"]*"?|'[^']*'?)?[^;]*/g) : process.env[key].split(delimiter);
+  const written = entries.map((entry) => {
+    const bare = windows ? entry.replace(/^["']|["']$/g, "") : entry;
+    return isAbsolute(bare) || (windows && !bare) ? entry : whole(bare);
+  });
+  return { ...process.env, [key]: written.join(delimiter) };
 }
 
 // A file as ffmpeg is given it: by its full path, since ffmpeg takes a name
@@ -260,4 +279,4 @@ async function measureFile(file) {
   return summary(stderr);
 }
 
-module.exports = { RATE, decode, encodeWav, measure, measureFile, run, reason, stopChildren, where };
+module.exports = { RATE, decode, encodeWav, fromHere, measure, measureFile, run, reason, stopChildren, where };

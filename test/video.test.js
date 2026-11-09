@@ -1236,17 +1236,87 @@ test("the run's own files are read by their names from their own folder, so an o
   assert.ok(Number.isFinite(heard.integrated), "video.mp4 has no sound");
 });
 
+// A stand-in for ffmpeg in `folder`, which runs the real one.
+function standIn(folder) {
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, "ffmpeg"), `#!/bin/sh\nexec "${real}" "$@"\n`, { mode: 0o755 });
+}
+
+// A folder whose X/link leads to Y/real, so that X/link/../bin is Y/bin to
+// the system, where the stand-in for ffmpeg is, and by its letters X/bin,
+// which is not there.
+function throughLink(name) {
+  const root = at(name);
+  fs.mkdirSync(path.join(root, "X"), { recursive: true });
+  fs.mkdirSync(path.join(root, "Y", "real"), { recursive: true });
+  fs.symlinkSync(path.join("..", "Y", "real"), path.join(root, "X", "link"));
+  standIn(path.join(root, "Y", "bin"));
+  return root;
+}
+
 test("an ffmpeg found through a relative entry of PATH is found by every call, also those that run in the out folder", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
   const { file } = fixture("house");
-  // A stand-in for ffmpeg in a folder PATH names from where musicfit starts.
-  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
-  const bin = at("relative-bin");
-  fs.mkdirSync(bin, { recursive: true });
-  fs.writeFileSync(path.join(bin, "ffmpeg"), `#!/bin/sh\nexec "${real}" "$@"\n`, { mode: 0o755 });
+  // A folder PATH names from where musicfit starts.
+  standIn(at("relative-bin"));
   const { FFMPEG_PATH, ...rest } = process.env;
   const run = spawnSync(process.execPath, [CLI, file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", at("relative-path-fit")], { cwd: dir, encoding: "utf8", env: { ...rest, PATH: `no-such-folder${path.delimiter}relative-bin` } });
   assert.equal(run.status, 0, run.stderr);
   assert.ok(fs.existsSync(at("relative-path-fit/video.mp4")));
+});
+
+test("an entry of PATH that goes through a link and up again keeps naming its folder for the calls that run in the out folder, absolute or relative", { skip: process.platform === "win32" ? "the stand-in is a shell script" : false }, () => {
+  const { file } = fixture("house");
+  const root = throughLink("path-through-link");
+  const { FFMPEG_PATH, ...rest } = process.env;
+  for (const [kind, entry] of [["absolute", `${root}/X/link/../bin`], ["relative", "X/link/../bin"]]) {
+    const out = at(`path-through-link-${kind}`);
+    const run = spawnSync(process.execPath, [CLI, file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", out], { cwd: root, encoding: "utf8", env: { ...rest, PATH: entry } });
+    assert.equal(run.status, 0, `${kind}: ${run.stderr}`);
+    assert.ok(fs.existsSync(path.join(out, "video.mp4")), kind);
+  }
+});
+
+test("off Windows a variable named path before PATH changes nothing, as the system reads only PATH", { skip: process.platform === "win32" ? "Windows has one variable for both names" : false }, () => {
+  const { file } = fixture("house");
+  standIn(at("lower-path-bin"));
+  const { FFMPEG_PATH, PATH, ...rest } = process.env;
+  const run = spawnSync(process.execPath, [CLI, file, "--length", "12", "--hit", "8", "--video", film("mute"), "--out", at("lower-path-fit")], { cwd: dir, encoding: "utf8", env: { path: "/no-such-folder", ...rest, PATH: "lower-path-bin" } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(fs.existsSync(at("lower-path-fit/video.mp4")));
+});
+
+test("a call run in another folder gets PATH with each relative entry put after the folder musicfit started in, and every absolute one as it was", { skip: process.platform === "win32" ? "this reads the POSIX rules" : false }, () => {
+  const { fromHere } = require("../skills/musicfit/scripts/lib/audio");
+  const here = process.cwd();
+  const saved = process.env.PATH;
+  try {
+    process.env.PATH = `/opt/link/../bin::rel:./dot:a/link/../up:"/quoted"`;
+    assert.equal(fromHere().PATH, `/opt/link/../bin:${here}:${here}/rel:${here}/dot:${here}/a/link/../up:${here}/"/quoted"`);
+    delete process.env.PATH;
+    assert.equal(fromHere(), process.env, "no PATH is no PATH");
+  } finally {
+    process.env.PATH = saved;
+  }
+});
+
+test("on Windows a PATH entry in quotes is read without them, one with a ; inside them stays whole, an empty one is passed over, and the variable is found in any case", () => {
+  const { fromHere } = require("../skills/musicfit/scripts/lib/audio");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  const saved = process.env.PATH;
+  const left = [`"C:\\Program Files\\ffmpeg\\bin"`, "D:\\tools", "", `'E:\\a;b'`, `"F:\\c;d"`, "\\\\server\\share\\bin"];
+  try {
+    delete process.env.PATH;
+    process.env.Path = [...left, "rel", `"in quotes"`].join(";");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    assert.equal(fromHere().Path, [...left, path.resolve("rel"), path.resolve("in quotes")].join(";"));
+    delete process.env.Path;
+    assert.equal(fromHere(), process.env, "no PATH is no PATH");
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    delete process.env.Path;
+    process.env.PATH = saved;
+  }
 });
 
 test("FIT.md says what plays under the picture in plain words, and never that the loudness stopped short when the music only dips", () => {
