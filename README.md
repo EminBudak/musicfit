@@ -12,6 +12,15 @@ AI music models ignore the length you ask for. Ask for 30 seconds and you may ge
 
 The track can come from any music model, and [Wiro](https://wiro.ai/explore/music-generation) has several.
 
+## Requirements
+
+- Node.js 22 or newer.
+- ffmpeg 4.4 or newer, Ubuntu 22.04's 4.4.2 included. musicfit does not use ffprobe, and needs no H.264 encoder, as `--video` copies the picture as it is. The filters it uses are ffmpeg's own, and so is the AAC encoder. `brew install ffmpeg` and `winget install ffmpeg` give a new enough one, and so does `sudo apt install ffmpeg` on Ubuntu 22.04, Debian 12 or newer. Set `FFMPEG_PATH` to use another build, as a path or a name on your PATH. It does not check ffmpeg's version, so an ffmpeg older than 4.4 goes ahead, though no test has run on one. A run that cannot start ffmpeg stops before any work and says why, and how to get one when there is none it can run.
+- Linux, where it is tested: on Ubuntu 22.04 with its ffmpeg 4.4.2 and on GitHub's ubuntu-latest runner (Ubuntu 24.04 with ffmpeg 6.1 at this release), on every push and before every release. This release has also run on Ubuntu 26.04 with ffmpeg 8.0. It is written for macOS and Windows as well, but it has not been run on either.
+- Room on the disk for the files of a run and those of the run before it, as the earlier files stay until the new ones are in place. `fitted.wav` and `mix.wav` take 17 MB each for every minute of the fit, and `video.mp4` as much as the video's picture and about 2 MB a minute of sound. Until a run with `--video` ends, it also keeps up to four AAC encodings of that sound, about 2 MB a minute each, in its hidden folder in the out folder, or next to it when the out folder is not there yet.
+- Memory that grows with the length of the fit and of the track, and with that of a voice or of the video's own sound, which are read to their end even where they run on past the fit: a 10 minute fit of a 10 minute track took 0.9 to 1.7 GB, and a 20 second fit with a voice took 0.2 GB, or 0.8 GB when the voice ran on 10 minutes past it (see [Limits](#limits)).
+- A run needs no network access, no browser and no API key: musicfit reads files on your disk, and nothing leaves your machine. Installing it needs the network, and `npx musicfit@latest` asks npm for the newest version each time it runs. There are no npm dependencies: the beat tracking is plain JavaScript.
+
 ## What you get
 
 ```
@@ -172,9 +181,7 @@ npx musicfit@latest track.mp3 --length 32 --video talk.mp4 --video-sound voice
 npx musicfit@latest track.mp3 --analyze
 ```
 
-Installed globally (`npm install -g musicfit`), the command is `musicfit`. npx keeps the copy an earlier run fetched, so `npx musicfit@latest` is how you get a newer version.
-
-It needs Node 22 or newer and ffmpeg 4.4 or newer (`brew install ffmpeg`, `sudo apt install ffmpeg` or `winget install ffmpeg`); the tests run on Ubuntu 22.04's ffmpeg 4.4 and on the latest Ubuntu's, before every release too. Set `FFMPEG_PATH` to pick the ffmpeg. There are no npm dependencies; the beat tracking is plain JavaScript and nothing leaves your machine.
+Installed globally (`npm install -g musicfit`), the command is `musicfit`. npx keeps the copy an earlier run fetched, so `npx musicfit@latest` is how you get a newer version. What a run needs is under [Requirements](#requirements).
 
 ## How it works
 
@@ -197,7 +204,7 @@ It needs Node 22 or newer and ffmpeg 4.4 or newer (`brew install ffmpeg`, `sudo 
 - Seams follow bars and sound, not words: in a song with singing a cut can fall in the middle of a line. An instrumental fits best.
 - Lengthening loops bars the track already has, so a 30 second track stretched to 3 minutes repeats, and so does the intro when the drop is asked for much later than the track has it (musicfit says how many times). Ask the music model for a little more than you need.
 - `--video` copies the picture as it is, so a picture an MP4 cannot hold that way (ProRes, DNxHD, VP8) is refused rather than encoded again. Only the picture and the new sound go into `video.mp4`: subtitles and other streams of the video are left out, a note says so of subtitles, and of several sound streams only the first is read.
-- A fit holds its sound in memory a few times over, so memory grows with `--length` and with the length of the track itself: a 10 minute fit of a 10 minute track took 0.9 to 1 GB, 1.2 GB with `--video` and its own sound kept, 1.4 to 1.5 GB with `--voice` and 1.7 GB with a voice and the video's own sound as well, on a desktop with ffmpeg 8 and in a 2 GB container with ffmpeg 4.4. A run takes a few seconds, and with `--video` of a long film a minute or more, most of it spent encoding the sound as AAC.
+- A fit holds its sound in memory a few times over, so memory grows with `--length` and with the length of the track itself: a 10 minute fit of a 10 minute track took 0.9 to 1 GB, 1.2 GB with `--video` and its own sound kept, 1.4 to 1.5 GB with `--voice` and 1.7 GB with a voice and the video's own sound as well, on a desktop with ffmpeg 8 and in a 2 GB container with ffmpeg 4.4. A voice and the video's own sound are read to their end before they are cut to the fit, so memory grows with their length too: a 20 second fit took 0.2 GB with a voice as long as itself, 0.8 GB with one that ran on 10 minutes past it, and 0.6 GB with a video whose own sound ran on 10 minutes past its picture, on the desktop and in the container alike. A run takes a few seconds, and with `--video` of a long film a minute or more, most of it spent encoding the sound as AAC.
 - musicfit cannot tell speech from sound effects or from music, which is why it asks for `--video-sound`. With `voice` the music dips under anything in that sound that stands out, a cough or a door as much as a word, and a hiss or a hum under a quiet voice comes up with it. With `keep` each place is set on its own, so a soft effect and a loud one over the same music come out alike, and a hiss or a hum between them comes up with the places around it.
 - It does not change the tempo or the pitch, and it does not check whether you may use the track.
 
