@@ -13,7 +13,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { RATE, run, decode, where } = require("./audio");
+const { RATE, run, decode, gone, where } = require("./audio");
 const { blocks } = require("./breathe");
 
 const num = (x, digits) => String(Number(x.toFixed(digits)));
@@ -92,7 +92,7 @@ async function probe(file) {
   } catch (err) {
     if (err.unstarted) throw err;
     const why = err.stderr || err.message;
-    if (/No such file|does not exist/.test(why)) throw new Error(`Cannot read ${file}: no such file`);
+    if (/No such file|does not exist/.test(why) && gone(file)) throw new Error(`Cannot read ${file}: no such file`);
     // An MP4 or a MOV that stops before its index or inside it, as one whose
     // recording or download was cut off; a file ffmpeg only guessed was one
     // is not.

@@ -221,3 +221,41 @@ test("a call in a folder that is not there is not taken for an ffmpeg that canno
     return true;
   });
 });
+
+test("a track or a video is said to be missing only when it is: a No such file or does not exist in what ffmpeg says, as in the name of the folder it is in, or of another file, is told in ffmpeg's words", posix, async () => {
+  const { decode } = require("../skills/musicfit/scripts/lib/audio");
+  const { probe } = require("../skills/musicfit/scripts/lib/video");
+  const gone = outDir("taken-away.wav");
+  await assert.rejects(decode(gone), { message: `Cannot read ${gone}: no such file` });
+  await assert.rejects(probe(gone), { message: `Cannot read ${gone}: no such file` });
+  // A file that is no track and no video, in folders named with those words.
+  for (const folder of ["No such file", "does not exist"]) {
+    const notes = path.join(outDir(folder), "notes.txt");
+    fs.mkdirSync(path.dirname(notes), { recursive: true });
+    fs.writeFileSync(notes, "some notes\n");
+    await assert.rejects(decode(notes), { message: `Cannot read ${notes}: ffmpeg does not know this format` });
+    await assert.rejects(probe(notes), { message: `Cannot read ${notes}: ffmpeg does not know this format` });
+  }
+  // An ffmpeg that fails on a part of the input that is not there, in the
+  // words ffmpeg 4.4 and 8 use.
+  const { file } = fixture("house");
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  const was = process.env.FFMPEG_PATH;
+  for (const [said, message] of [
+    ["/nonexistent/part.wav: No such file or directory", "ffmpeg: /nonexistent/part.wav: No such file or directory"],
+    ["[in#0 @ 0x5d9b3c0a8cc0] Error opening input: No such file or directory\nError opening input file /nonexistent/part.wav.\nError opening input files: No such file or directory", "ffmpeg: Error opening input: No such file or directory"],
+  ]) {
+    const standIn = path.join(outDir(`partgone-${message.length}`), "ffmpeg");
+    fs.mkdirSync(path.dirname(standIn), { recursive: true });
+    fs.writeFileSync(standIn, `#!/bin/sh\nif [ "$1" = -version ]; then exec "${real}" -version; fi\ncat >&2 <<'LINES'\n${said}\nLINES\nexit 1\n`);
+    fs.chmodSync(standIn, 0o755);
+    process.env.FFMPEG_PATH = standIn;
+    try {
+      await assert.rejects(decode(file), { message });
+      await assert.rejects(probe(file), { message });
+    } finally {
+      if (was === undefined) delete process.env.FFMPEG_PATH;
+      else process.env.FFMPEG_PATH = was;
+    }
+  }
+});

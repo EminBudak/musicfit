@@ -66,6 +66,19 @@ function fromHere() {
 // protocol, and never a full path.
 const where = (file) => whole(file);
 
+// Whether a file the run looked at before any work is not there now, as
+// when it was taken away since: only then is a "No such file" that ffmpeg
+// says while it reads it about that file. ffmpeg 7 and newer say it on a
+// line that does not name the file.
+function gone(file) {
+  try {
+    fs.statSync(where(file));
+    return false;
+  } catch (err) {
+    return err.code === "ENOENT" || err.code === "ENOTDIR";
+  }
+}
+
 // How each message that asks for an ffmpeg says to get one.
 const INSTALL = "brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg";
 
@@ -556,7 +569,7 @@ async function decode(file, { rate = RATE, channels = 2, from = null, stream = 0
     // ffmpeg says why early and sums up last, so all it said is searched.
     const said = err.stderr || err.message;
     if (/matches no streams/.test(said)) throw new Error(`${file} has no audio stream`);
-    if (/No such file|does not exist/.test(said)) throw new Error(`Cannot read ${file}: no such file`);
+    if (/No such file|does not exist/.test(said) && gone(file)) throw new Error(`Cannot read ${file}: no such file`);
     if (/Invalid data found/.test(said)) throw new Error(`Cannot read ${file}: ffmpeg does not know this format`);
     throw err;
   }
@@ -601,4 +614,4 @@ async function measureFile(file) {
   return summary(stderr);
 }
 
-module.exports = { RATE, decode, encodeWav, fromHere, measure, measureFile, quoted, ready, run, reason, stopChildren, where };
+module.exports = { RATE, decode, encodeWav, fromHere, gone, measure, measureFile, quoted, ready, run, reason, stopChildren, where };
