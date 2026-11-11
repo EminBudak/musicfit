@@ -264,6 +264,35 @@ test("an ffmpeg that cannot be started again later in a run is told as one, neve
   }
 });
 
+test("on Windows an FFMPEG_PATH that names a file with no extension is said to have no .exe in its name, which Windows does not run, and an ffmpeg.exe beside it is used", posix, async () => {
+  // Windows as this system plays it, with stand-ins its shell runs.
+  const { ready } = require("../skills/musicfit/scripts/lib/audio");
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  const bare = path.join(outDir("no-extension"), "ffmpeg");
+  const answers = `#!/bin/sh\nexec "${real}" "$@"\n`;
+  fs.mkdirSync(path.dirname(bare), { recursive: true });
+  fs.writeFileSync(bare, answers);
+  fs.chmodSync(bare, 0o755);
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  const was = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = bare;
+  try {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    await assert.rejects(ready(), (err) => {
+      assert.equal(err.message, `musicfit needs ffmpeg, and FFMPEG_PATH points to ${bare}, which has no .exe in its name, so Windows does not run it. Set FFMPEG_PATH to an ffmpeg, or unset it and install one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).`);
+      assert.ok(err.unstarted);
+      return true;
+    });
+    fs.writeFileSync(`${bare}.exe`, answers);
+    fs.chmodSync(`${bare}.exe`, 0o755);
+    assert.equal(await ready(), `${bare}.exe`);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (was === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = was;
+  }
+});
+
 test("a call in a folder that is not there is not taken for an ffmpeg that cannot start", async () => {
   const { run } = require("../skills/musicfit/scripts/lib/audio");
   const gone = path.join(outDir("no-such-folder"), "inside");

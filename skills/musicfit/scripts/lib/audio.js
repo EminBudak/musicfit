@@ -95,7 +95,9 @@ function defaultFolders() {
 // each folder of PATH, an empty or a relative one read from where musicfit
 // was started, or with no PATH at all in the system's own folders. Windows
 // looks in the current folder first and adds .com and .exe to the name,
-// which it tries as it is only when it has an extension.
+// which it tries as it is only when it has an extension. A path with a
+// folder in it comes first as it is all the same, so a file there with no
+// extension is named for what it is (see barred()).
 function places(program) {
   const windows = process.platform === "win32";
   if (path.basename(program) !== program) return [program, ...(windows ? [`${program}.com`, `${program}.exe`] : [])];
@@ -133,7 +135,9 @@ function fileOnTheWay(file) {
 // and a link to nothing, and looks in the next folder; it passes over
 // nothing there and a folder this user may not enter "quietly", as these
 // may hold no such program at all; and it "stops" at a path it cannot
-// follow, as a loop of links.
+// follow, as a loop of links. Windows passes over a file whose name has no
+// extension too, as it tries that name with .com and .exe added (see
+// places()).
 function barred(file) {
   let stat;
   try {
@@ -155,6 +159,7 @@ function barred(file) {
     return { on: "stops", words: `cannot be looked at: ${worded(err)}` };
   }
   if (stat.isDirectory()) return { on: "passes", words: "is a folder" };
+  if (process.platform === "win32" && !path.extname(file)) return { on: "passes", words: "has no .exe in its name, so Windows does not run it" };
   try {
     fs.accessSync(file, fs.constants.X_OK);
   } catch {
