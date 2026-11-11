@@ -53,6 +53,12 @@ test("the line that says why is found in what ffmpeg 4.4, 6.1 and 8 print", () =
     "no-input-8.0": "ffmpeg: Error opening input: No such file or directory",
     "encoder-4.4": "ffmpeg: Unknown encoder 'nosuchencoder'",
     "encoder-8.0": "ffmpeg: Unknown encoder 'nosuchencoder'",
+    // At -v info, as the loudness meter and the read of a video run, ffmpeg
+    // ends a failure with its report of what it wrote, "... muxing
+    // overhead: unknown": in 4.4 when the pipe it writes to closes, in 8
+    // when the system starts no more threads for it.
+    "closed-pipe-4.4": "ffmpeg: Error writing trailer of pipe:1: Broken pipe",
+    "no-threads-8.0": "ffmpeg: Error sending frames to consumers: Resource temporarily unavailable",
   };
   for (const [name, line] of Object.entries(cases)) assert.equal(reason(said(name), 1), line, name);
   // A line with no word of an error, as a wrapper or a guard may print, and nothing at all.

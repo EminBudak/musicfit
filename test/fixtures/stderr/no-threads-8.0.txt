@@ -1,0 +1,36 @@
+[aist#0:0/pcm_s16le @ 0x5d5559ec9500] Guessed Channel Layout: stereo
+Input #0, wav, from 'track.wav':
+  Metadata:
+    encoder         : Lavf62.3.100
+  Duration: 00:00:20.00, bitrate: 1411 kb/s
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s16, 1411 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_s16le (native))
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.3.100
+  Stream #0:0: Audio: pcm_s16le, 44100 Hz, stereo, s16, 1411 kb/s
+    Metadata:
+      encoder         : Lavc62.11.100 pcm_s16le
+[out#0/null @ 0x5d5559ec9700] pthread_create() failed: Resource temporarily unavailable
+[af#0:0 @ 0x5d5559eca4c0] Error sending frames to consumers: Resource temporarily unavailable
+[Parsed_ebur128_0 @ 0x7aa0ec001400] Summary:
+
+  Integrated loudness:
+    I:         -70.0 LUFS
+    Threshold:   0.0 LUFS
+
+  Loudness range:
+    LRA:         0.0 LU
+    Threshold:   0.0 LUFS
+    LRA low:     0.0 LUFS
+    LRA high:    0.0 LUFS
+
+  True peak:
+    Peak:      -21.1 dBFS
+[af#0:0 @ 0x5d5559eca4c0] Task finished with error code: -11 (Resource temporarily unavailable)
+[af#0:0 @ 0x5d5559eca4c0] Terminating thread with return code -11 (Resource temporarily unavailable)
+[out#0/null @ 0x5d5559ec9700] video:0KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+[out#0/null @ 0x5d5559ec9700] Output file is empty, nothing was encoded(check -ss / -t / -frames parameters if used)
+size=N/A time=N/A bitrate=N/A speed=N/A elapsed=0:00:00.00    
+Conversion failed!

@@ -387,6 +387,11 @@ const CLOSING = [
   /^Error muxing a packet$/,
   /^Task finished with error code/,
   /^Terminating thread with return code/,
+  // The report of what it wrote, which ffmpeg prints at -v info at the end
+  // of a run, a failed one too: "video:0kB audio:0kB ..." in 4.4 and
+  // "video:0KiB audio:0KiB ..." in newer ones. Its "muxing overhead:
+  // unknown" is no cause.
+  /^video:\S+ audio:\S+ /,
 ];
 // The words of a line that says what went wrong.
 const WRONG = /error|\b(invalid|unable|cannot|can't|could not|couldn't|failed|not found|no such|unknown|unrecognized|not supported|denied|no space|refused|not opened|is not|does not)\b/i;

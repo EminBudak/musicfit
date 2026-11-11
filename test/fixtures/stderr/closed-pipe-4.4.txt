@@ -1,0 +1,17 @@
+Guessed Channel Layout for Input Stream #0.0 : stereo
+Input #0, wav, from 'track.wav':
+  Metadata:
+    encoder         : Lavf58.76.100
+  Duration: 00:00:20.00, bitrate: 1411 kb/s
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s16, 1411 kb/s
+Output #0, framecrc, to 'pipe:1':
+  Metadata:
+    encoder         : Lavf58.76.100
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s16, 1411 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+av_interleaved_write_frame(): Broken pipe
+Error writing trailer of pipe:1: Broken pipe
+size=       2kB time=00:00:00.60 bitrate=  22.1kbits/s speed=5.34e+03x    
+video:0kB audio:108kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown
+Conversion failed!
