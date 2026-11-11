@@ -139,22 +139,37 @@ test("a stereo sound handed to ffmpeg a block at a time is the same sound as one
   assert.ok(fs.readFileSync(a).equals(fs.readFileSync(b)));
 });
 
-test("a call that cannot start ffmpeg for want of file descriptors says so and what to do, where the run crashed on it", { skip: process.platform === "win32" ? "it takes sh to lower the limit" : false }, () => {
-  // A node with 256 file descriptors at most holds all it may but one, too
-  // few for ffmpeg's pipes, and runs ffmpeg.
+const lowLimit = { skip: process.platform === "win32" ? "it takes sh to lower the limit" : false };
+
+// What a node with 256 file descriptors at most prints when it holds all
+// it may but one, too few for ffmpeg's pipes, and runs ffmpeg: first, or
+// once the start check has passed while they were free.
+function shortOfFiles(checkFirst) {
   const script = `
     const fs = require("node:fs");
-    const { run } = require(${JSON.stringify(path.join(ROOT, "skills", "musicfit", "scripts", "lib", "audio"))});
-    const held = [];
-    try {
-      for (;;) held.push(fs.openSync(${JSON.stringify(__filename)}, "r"));
-    } catch {}
-    fs.closeSync(held.pop());
-    run(["-version"], null).then(() => console.log("ran"), (err) => console.log(err.message, err.unstarted));
+    const { ready, run } = require(${JSON.stringify(path.join(ROOT, "skills", "musicfit", "scripts", "lib", "audio"))});
+    (${checkFirst} ? ready() : Promise.resolve()).then(() => {
+      const held = [];
+      try {
+        for (;;) held.push(fs.openSync(${JSON.stringify(__filename)}, "r"));
+      } catch {}
+      fs.closeSync(held.pop());
+      return run(["-version"], null);
+    }).then(() => console.log("ran"), (err) => console.log(err.message, err.unstarted));
   `;
   const r = spawnSync("sh", ["-c", 'ulimit -n 256 && exec "$0" -e "$1"', process.execPath, script], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout, "musicfit could not start ffmpeg: too many open files. Raise the limit on open files (ulimit -n) and run it again. true\n");
+  return r.stdout;
+}
+
+const NO_FILES = "musicfit could not start ffmpeg: too many open files. Raise the limit on open files (ulimit -n) and run it again. true\n";
+
+test("a start check that cannot start ffmpeg for want of file descriptors says so and what to do", lowLimit, () => {
+  assert.equal(shortOfFiles(false), NO_FILES);
+});
+
+test("a call after the start check that cannot start ffmpeg for want of file descriptors says so and what to do, where the run ended with the words of a TypeError", lowLimit, () => {
+  assert.equal(shortOfFiles(true), NO_FILES);
 });
 
 test("a line a program printed is quoted as it is, its control characters written out, and a long one keeps its start and its end", () => {
@@ -215,6 +230,37 @@ test("the ffmpeg is asked its version once for its FFMPEG_PATH and PATH, looked 
   } finally {
     if (was === undefined) delete process.env.FFMPEG_PATH;
     else process.env.FFMPEG_PATH = was;
+  }
+});
+
+test("an ffmpeg that cannot be started again later in a run is told as one, never as a track or a video ffmpeg cannot read, nor as a video.mp4 that cannot be read back", posix, () => {
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  const root = outDir("started-again");
+  const film = path.join(root, "film.mp4");
+  fs.mkdirSync(root, { recursive: true });
+  const made = spawnSync(real, ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x96:r=25:d=12", "-c:v", "mpeg4", "-q:v", "6", film], { encoding: "utf8" });
+  assert.equal(made.status, 0, made.stderr);
+  const { file } = fixture("house");
+  const { FFMPEG_PATH, ...rest } = process.env;
+  // The track is read first, or with --video the video, once ffmpeg has
+  // answered its version; video.mp4 is read back once it is written.
+  for (const [n, gone, args] of [
+    [1, "-version", []],
+    [2, "-version", ["--video", film]],
+    [3, "+faststart", ["--video", film]],
+  ]) {
+    // A wrapper that runs ffmpeg and takes itself away after the call that
+    // has `gone` in it, in a folder whose name holds the words a failed read
+    // of the track or the video looks for in what ffmpeg says.
+    const standIn = path.join(root, String(n), "Invalid data found", "ffmpeg");
+    fs.mkdirSync(path.dirname(standIn), { recursive: true });
+    fs.writeFileSync(standIn, `#!/bin/sh\n"${real}" "$@"\nstatus=$?\ncase " $* " in *" ${gone} "*) rm -f "$0" ;; esac\nexit $status\n`);
+    fs.chmodSync(standIn, 0o755);
+    const out = path.join(root, String(n), "out");
+    const run = spawnSync(process.execPath, [CLI, file, "--length", "12", ...args, "--out", out], { encoding: "utf8", env: { ...rest, FFMPEG_PATH: standIn } });
+    assert.equal(run.status, 1, run.stderr);
+    assert.ok(`\n${run.stderr}`.endsWith(`\nmusicfit: musicfit could not start ffmpeg, ${standIn}, again: no such file or directory. Check that it is still there and may be run, and run musicfit again.\n`), `${n}: ${run.stderr}`);
+    assert.deepEqual(fs.readdirSync(path.dirname(out)), ["Invalid data found"], `${n}`);
   }
 });
 
