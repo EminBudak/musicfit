@@ -182,26 +182,34 @@ test("a line a program printed is quoted as it is, its control characters writte
   assert.equal(quoted("x".repeat(200)), `"${"x".repeat(200)}"`);
 });
 
-test("an ffmpeg that gives no answer when asked its version is stopped and named once the time is up", posix, async () => {
+test("an ffmpeg that gives no answer when asked its version is stopped once the time is up, and the run stops saying only that, with no advice to install one", posix, async () => {
   const { ready } = require("../skills/musicfit/scripts/lib/audio");
-  const standIn = path.join(outDir("silent"), "ffmpeg");
-  fs.mkdirSync(path.dirname(standIn), { recursive: true });
-  fs.writeFileSync(standIn, "#!/bin/sh\nexec sleep 30\n");
-  fs.chmodSync(standIn, 0o755);
-  const was = process.env.FFMPEG_PATH;
-  process.env.FFMPEG_PATH = standIn;
-  const began = Date.now();
-  try {
-    await assert.rejects(ready(500), (err) => {
-      assert.equal(err.message, `musicfit needs ffmpeg, and FFMPEG_PATH points to ${standIn}, which did not run as ffmpeg: it gave no answer in 0.5 s. Set FFMPEG_PATH to an ffmpeg, or unset it and install one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).`);
-      assert.ok(err.unstarted);
-      return true;
-    });
-  } finally {
-    if (was === undefined) delete process.env.FFMPEG_PATH;
-    else process.env.FFMPEG_PATH = was;
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  // One that never answers, and an ffmpeg that would, a moment too late,
+  // as on a machine short of memory.
+  for (const [name, script] of [
+    ["silent", "#!/bin/sh\nexec sleep 30\n"],
+    ["slow", `#!/bin/sh\nsleep 2 && exec "${real}" "$@"\n`],
+  ]) {
+    const standIn = path.join(outDir(name), "ffmpeg");
+    fs.mkdirSync(path.dirname(standIn), { recursive: true });
+    fs.writeFileSync(standIn, script);
+    fs.chmodSync(standIn, 0o755);
+    const was = process.env.FFMPEG_PATH;
+    process.env.FFMPEG_PATH = standIn;
+    const began = Date.now();
+    try {
+      await assert.rejects(ready(500), (err) => {
+        assert.equal(err.message, `musicfit could not check ffmpeg, ${standIn}: it gave no answer in 0.5 s when asked its version, as on a machine short of memory. Run it again.`);
+        assert.ok(err.unstarted);
+        return true;
+      });
+    } finally {
+      if (was === undefined) delete process.env.FFMPEG_PATH;
+      else process.env.FFMPEG_PATH = was;
+    }
+    assert.ok(Date.now() - began < 10000, `${name}: ${Date.now() - began} ms`);
   }
-  assert.ok(Date.now() - began < 10000, `${Date.now() - began} ms`);
 });
 
 test("the ffmpeg is asked its version once for its FFMPEG_PATH and PATH, looked for again after a failure, and one that can no longer be started is said to be", posix, async () => {

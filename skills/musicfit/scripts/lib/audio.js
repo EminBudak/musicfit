@@ -246,8 +246,7 @@ function unstartable(file, err) {
 // what is wrong, else on its output, then how it ended. ffmpeg prints its
 // version on its output, so a program that ended well printing only on its
 // error output is said to.
-function answered(r, limit) {
-  if (r.late) return `it gave no answer in ${limit / 1000} s`;
+function answered(r) {
   const ended = r.signal ? `was stopped by ${r.signal}` : `exited with ${r.code}`;
   const line = firstLine(r.stderr);
   if (line && r.code === 0 && !firstLine(r.stdout)) return `it printed ${quoted(line)} on its error output, nothing on its output, and exited with 0`;
@@ -320,7 +319,9 @@ function version(file, limit) {
 // it exits with 0 and prints a line that starts with "ffmpeg version";
 // else the run stops, with what the system said or the first line the
 // program printed (see needs()). When the system finds none after a file
-// it passed over, the first such file is named.
+// it passed over, the first such file is named. One that gives no answer
+// in time may be ffmpeg on a machine short of memory as well as a program
+// that is not, so nothing more is said of it.
 async function find(limit) {
   const program = ffmpegPath();
   let passed = null;
@@ -330,8 +331,9 @@ async function find(limit) {
     if (!seen) {
       const r = await version(file, limit);
       if (r.err && Object.hasOwn(SHORT, r.err.code)) throw unusable(`musicfit could not start ffmpeg: ${SHORT[r.err.code]}.`);
+      if (r.late) throw unusable(`musicfit could not check ffmpeg, ${file}: it gave no answer in ${limit / 1000} s when asked its version, as on a machine short of memory. Run it again.`);
       if (!r.err && r.code === 0 && /^ffmpeg version\b/m.test(r.stdout)) return file;
-      seen = { on: r.err && PASSED.has(r.err.code) ? "passes" : "stops", words: `did not run as ffmpeg: ${r.err ? unstartable(file, r.err) : answered(r, limit)}`, signal: r.signal };
+      seen = { on: r.err && PASSED.has(r.err.code) ? "passes" : "stops", words: `did not run as ffmpeg: ${r.err ? unstartable(file, r.err) : answered(r)}`, signal: r.signal };
     }
     if (seen.on === "stops") throw unusable(needs(file, seen.words), { stopped: Boolean(seen.signal) });
     if (seen.on === "quietly") none = none || seen;
