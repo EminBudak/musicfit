@@ -90,6 +90,7 @@ async function probe(file) {
     crc = Buffer.concat(chunks).toString("utf8");
     said = stderr;
   } catch (err) {
+    if (err.unstarted) throw err;
     const why = err.stderr || err.message;
     if (/No such file|does not exist/.test(why)) throw new Error(`Cannot read ${file}: no such file`);
     // An MP4 or a MOV that stops before its index or inside it, as one whose
@@ -279,7 +280,7 @@ async function mux(file, sound, out, { picture, comment, start }) {
     const { stderr } = await run(["-v", "error", "-i", name, "-map", "0", "-c", "copy", "-f", "null", "-"], null, { cwd: path.dirname(out) });
     if (DAMAGED.some((line) => line.test(stderr))) why = "it is cut short";
   } catch (err) {
-    if (err.stopped) throw err;
+    if (err.stopped || err.unstarted) throw err;
     why = err.message.replace(/^ffmpeg: /, "").split(`${name}: `).join("");
   }
   if (why) throw new Error(`The video.mp4 this run wrote cannot be read back (${why}), so it was not put in place`);

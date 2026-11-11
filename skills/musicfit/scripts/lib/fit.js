@@ -8,7 +8,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { RATE, decode, encodeWav, measure, measureFile } = require("./audio");
+const { RATE, decode, encodeWav, measure, measureFile, ready } = require("./audio");
 const { probe, fits, ownSound, encodeAac, mux, mark, fpsText } = require("./video");
 const { RATE: ANALYSIS_RATE } = require("./analyze");
 const { analyzeInThread } = require("./thread");
@@ -110,6 +110,9 @@ async function fit(track, options) {
   // Begun first, so a stop while it waits for another run in that folder is said.
   const run = begin(dir);
   try {
+    // An ffmpeg that cannot be used stops the run before it looks at the
+    // out folder.
+    await ready();
     await claim(dir, writes, [track, options.voice, options.video]);
     const o = { ...options, warnings: [...(options.warnings || [])] };
     // The video is read before any work, so one that cannot take this fit

@@ -132,3 +132,92 @@ test("a stereo sound handed to ffmpeg a block at a time is the same sound as one
   await encodeWav(whole, b);
   assert.ok(fs.readFileSync(a).equals(fs.readFileSync(b)));
 });
+
+test("a call that cannot start ffmpeg for want of file descriptors says so and what to do, where the run crashed on it", { skip: process.platform === "win32" ? "it takes sh to lower the limit" : false }, () => {
+  // A node with 256 file descriptors at most holds all it may but one, too
+  // few for ffmpeg's pipes, and runs ffmpeg.
+  const script = `
+    const fs = require("node:fs");
+    const { run } = require(${JSON.stringify(path.join(ROOT, "skills", "musicfit", "scripts", "lib", "audio"))});
+    const held = [];
+    try {
+      for (;;) held.push(fs.openSync(${JSON.stringify(__filename)}, "r"));
+    } catch {}
+    fs.closeSync(held.pop());
+    run(["-version"], null).then(() => console.log("ran"), (err) => console.log(err.message, err.unstarted));
+  `;
+  const r = spawnSync("sh", ["-c", 'ulimit -n 256 && exec "$0" -e "$1"', process.execPath, script], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "musicfit could not start ffmpeg: too many open files. Raise the limit on open files (ulimit -n) and run it again. true\n");
+});
+
+test("a line a program printed is quoted as it is, its control characters written out, and a long one keeps its start and its end", () => {
+  const { quoted } = require("../skills/musicfit/scripts/lib/audio");
+  assert.equal(quoted("#!/bin/sh\r"), '"#!/bin/sh\\r"');
+  assert.equal(quoted("a\tb\x1b[31mc\x7f\u0085\ufeffd\u202e"), '"a\\tb\\x1b[31mc\\x7f\\x85\\ufeffd\\u202e"');
+  assert.equal(quoted("env: \u2018runner\u2019: No such file or directory"), '"env: \u2018runner\u2019: No such file or directory"');
+  const long = `${"a".repeat(150)}${"b".repeat(100)}`;
+  assert.equal(quoted(long), `"${"a".repeat(120)}...${"b".repeat(80)}"`);
+  assert.equal(quoted("x".repeat(200)), `"${"x".repeat(200)}"`);
+});
+
+test("an ffmpeg that gives no answer when asked its version is stopped and named once the time is up", posix, async () => {
+  const { ready } = require("../skills/musicfit/scripts/lib/audio");
+  const standIn = path.join(outDir("silent"), "ffmpeg");
+  fs.mkdirSync(path.dirname(standIn), { recursive: true });
+  fs.writeFileSync(standIn, "#!/bin/sh\nexec sleep 30\n");
+  fs.chmodSync(standIn, 0o755);
+  const was = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = standIn;
+  const began = Date.now();
+  try {
+    await assert.rejects(ready(500), (err) => {
+      assert.equal(err.message, `musicfit needs ffmpeg, and FFMPEG_PATH points to ${standIn}, which did not run as ffmpeg: it gave no answer in 0.5 s. Set FFMPEG_PATH to an ffmpeg, or unset it and install one (brew install ffmpeg, sudo apt install ffmpeg or winget install ffmpeg).`);
+      assert.ok(err.unstarted);
+      return true;
+    });
+  } finally {
+    if (was === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = was;
+  }
+  assert.ok(Date.now() - began < 10000, `${Date.now() - began} ms`);
+});
+
+test("the ffmpeg is asked its version once for its FFMPEG_PATH and PATH, looked for again after a failure, and one that can no longer be started is said to be", posix, async () => {
+  const { ready, run } = require("../skills/musicfit/scripts/lib/audio");
+  const real = process.env.FFMPEG_PATH ? path.resolve(process.env.FFMPEG_PATH) : spawnSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).stdout.trim();
+  const folder = outDir("asked-once");
+  fs.mkdirSync(folder, { recursive: true });
+  const standIn = path.join(folder, "ffmpeg");
+  const asked = path.join(folder, "asked");
+  const was = process.env.FFMPEG_PATH;
+  process.env.FFMPEG_PATH = standIn;
+  try {
+    await assert.rejects(ready(), { message: /^musicfit needs ffmpeg, and FFMPEG_PATH points to .*, where there is none\./ });
+    fs.writeFileSync(standIn, `#!/bin/sh\necho "$*" >> "${asked}"\nexec "${real}" "$@"\n`);
+    fs.chmodSync(standIn, 0o755);
+    assert.equal(await ready(), standIn);
+    await run(["-version"], null);
+    await run(["-version"], null);
+    assert.equal(fs.readFileSync(asked, "utf8"), "-version\n-hide_banner -nostdin -version\n-hide_banner -nostdin -version\n");
+    fs.rmSync(standIn);
+    await assert.rejects(run(["-version"], null), (err) => {
+      assert.equal(err.message, `musicfit could not start ffmpeg, ${standIn}, again: no such file or directory.`);
+      assert.ok(err.unstarted);
+      return true;
+    });
+  } finally {
+    if (was === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = was;
+  }
+});
+
+test("a call in a folder that is not there is not taken for an ffmpeg that cannot start", async () => {
+  const { run } = require("../skills/musicfit/scripts/lib/audio");
+  const gone = path.join(outDir("no-such-folder"), "inside");
+  await assert.rejects(run(["-version"], null, { cwd: gone }), (err) => {
+    assert.ok(!err.unstarted, err.message);
+    assert.doesNotMatch(err.message, /needs ffmpeg/);
+    return true;
+  });
+});
