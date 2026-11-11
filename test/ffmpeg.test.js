@@ -208,7 +208,7 @@ test("the ffmpeg is asked its version once for its FFMPEG_PATH and PATH, looked 
     assert.equal(fs.readFileSync(asked, "utf8"), "-version\n-hide_banner -nostdin -version\n-hide_banner -nostdin -version\n");
     fs.rmSync(standIn);
     await assert.rejects(run(["-version"], null), (err) => {
-      assert.equal(err.message, `musicfit could not start ffmpeg, ${standIn}, again: no such file or directory.`);
+      assert.equal(err.message, `musicfit could not start ffmpeg, ${standIn}, again: no such file or directory. Check that it is still there and may be run, and run musicfit again.`);
       assert.ok(err.unstarted);
       return true;
     });

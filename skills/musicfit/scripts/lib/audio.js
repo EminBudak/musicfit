@@ -466,11 +466,12 @@ function call(file, args, input, { writes = null, cwd } = {}) {
   return new Promise((resolve, reject) => {
     // The system short of something to start it with, the folder of the
     // call gone, which is no fault of ffmpeg's, or an ffmpeg that ran when
-    // the run began and cannot be started now.
+    // the run began and cannot be started now, as when it was removed or
+    // changed since.
     const failed = (error) => {
       if (Object.hasOwn(SHORT, error.code)) reject(unusable(`musicfit could not start ffmpeg: ${SHORT[error.code]}.`));
       else if (cwd && !enterable(cwd)) reject(error);
-      else reject(unusable(`musicfit could not start ffmpeg, ${file}, again: ${worded(error)}.`));
+      else reject(unusable(`musicfit could not start ffmpeg, ${file}, again: ${worded(error)}. Check that it is still there and may be run, and run musicfit again.`));
     };
     let child;
     try {
