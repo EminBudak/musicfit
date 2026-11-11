@@ -7,12 +7,13 @@ on:
 jobs:
   test:
     # The same tests as on every push, on Ubuntu 22.04's ffmpeg 4.4 (the
-    # oldest musicfit works with, and the one the hosted service runs) and
-    # on ubuntu-latest's; nothing is published unless both pass.
+    # oldest musicfit works with, and the one the hosted service runs), on
+    # Ubuntu 24.04's 6.1 and on ubuntu-latest's; nothing is published unless
+    # all of them pass.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04]
+        os: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
 
     permissions:

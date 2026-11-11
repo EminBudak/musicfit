@@ -7,11 +7,12 @@ on:
 jobs:
   test:
     # Ubuntu 22.04's ffmpeg is 4.4, the oldest musicfit works with and the
-    # one the hosted service runs; ubuntu-latest has a newer one.
+    # one the hosted service runs, Ubuntu 24.04's is 6.1, and ubuntu-latest
+    # is the newest Ubuntu GitHub runs.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04]
+        os: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
