@@ -7,8 +7,8 @@
     "name": "Emin Budak",
     "url": "https://eminbudak.com"
   },
-  "homepage": "https://github.com/EminBudak/musicfit",
-  "repository": "https://github.com/EminBudak/musicfit",
+  "homepage": "https://github.com/MakersMCP/musicfit",
+  "repository": "https://github.com/MakersMCP/musicfit",
   "license": "MIT",
   "keywords": ["music", "audio", "video", "beat", "loudness"]
 }

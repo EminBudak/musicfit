@@ -102,20 +102,20 @@ When another program holds a file open so that it cannot be moved, the run says 
 musicfit ships as an [Agent Skill](https://agentskills.io). Install it once and your agent runs it by itself when a video needs music that fits:
 
 ```bash
-npx skills add EminBudak/musicfit
+npx skills add MakersMCP/musicfit
 ```
 
 That covers Claude Code, Codex, Cursor and the other agents the [`skills`](https://github.com/vercel-labs/skills) CLI supports. In Claude Code you can add it as a plugin instead:
 
 ```
-/plugin marketplace add EminBudak/musicfit
+/plugin marketplace add MakersMCP/musicfit
 /plugin install musicfit@musicfit
 ```
 
 In GitHub Copilot CLI it takes the same two steps:
 
 ```bash
-copilot plugin marketplace add EminBudak/musicfit
+copilot plugin marketplace add MakersMCP/musicfit
 copilot plugin install musicfit@musicfit
 ```
 
@@ -210,9 +210,9 @@ Installed globally (`npm install -g musicfit`), the command is `musicfit`. npx k
 
 ## See also
 
-- [launch-film](https://github.com/EminBudak/launch-film) turns a site into a short launch film, rendered on your machine.
-- [easyscreenshotkit](https://github.com/EminBudak/easyscreenshotkit) saves clean screenshots of a website's pages.
-- [easybrandkit](https://github.com/EminBudak/easybrandkit) saves a site's real logo files, colors and fonts as a brand kit.
+- [launch-film](https://github.com/MakersMCP/launch-film) turns a site into a short launch film, rendered on your machine.
+- [easyscreenshotkit](https://github.com/MakersMCP/easyscreenshotkit) saves clean screenshots of a website's pages.
+- [easybrandkit](https://github.com/MakersMCP/easybrandkit) saves a site's real logo files, colors and fonts as a brand kit.
 
 ## License
 
